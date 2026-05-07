@@ -19,7 +19,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from lyra import markdown as md
-from lyra.index.graph_projection import GraphProjectionConfig, open_db, neighbours
+from lyra.index.graph_projection import GraphProjectionConfig, open_db, traverse
 
 # Pattern for qmd search/vsearch text output
 _HIT_RE = re.compile(
@@ -31,6 +31,7 @@ _SCORE_RE = re.compile(r"^Score:\s*([\d.]+)%", re.MULTILINE)
 _SNIPPET_RE = re.compile(r"^@@[^\n]*\n(.*?)(?=\nqmd://|\Z)", re.DOTALL | re.MULTILINE)
 
 COLLECTION_NAME = "lyra-wiki"
+RRF_K = 60
 
 
 @dataclass
@@ -94,10 +95,13 @@ def hybrid_query(
     graph_config: GraphProjectionConfig | None = None,
     use_vector: bool = True,
     extra_sources: list | None = None,
+    max_hops: int = 2,
 ) -> list[QueryHit]:
     """Run hybrid BM25/vector/graph query over the wiki.
 
-    Returns up to ``k`` hits ordered by descending score.
+    Three retrieval streams — BM25, vector, and multi-hop graph traversal —
+    are fused with Reciprocal Rank Fusion (k=60).  Returns up to ``k`` hits
+    ordered by descending RRF score.
     """
     wiki_root = vault_path / "wiki"
 
@@ -107,34 +111,31 @@ def hybrid_query(
         try:
             vector_hits = _run_qmd_search(query, k=k * 2, vector=True, wiki_root=wiki_root)
         except Exception:  # noqa: BLE001
-            pass  # vector index absent — BM25 only
+            pass
 
-    merged = _merge_hits(bm25_hits, vector_hits, vault_path=vault_path)
-
-    # Fan-out to extra sources (M2) and merge
+    extra_hits: list[QueryHit] = []
     if extra_sources:
         extra_hits = fanout_query(query, extra_sources, k=k)
-        by_path = {h.file_path: h for h in merged}
-        for h in extra_hits:
-            if h.id not in {m.id for m in merged}:
-                merged.append(h)
 
-    if not merged:
-        return []
-
-    # One-hop graph expansion: for top hits that have a ULID id, fetch neighbours
+    graph_hits: list[QueryHit] = []
     try:
         cfg = graph_config or GraphProjectionConfig()
         if cfg.db_path.exists():
             conn = open_db(cfg)
             try:
-                merged = _expand_graph(merged, conn, vault_path, k=k)
+                graph_hits = _expand_graph(
+                    bm25_hits + vector_hits, conn, vault_path, k=k, max_hops=max_hops
+                )
             finally:
                 conn.close()
     except Exception:  # noqa: BLE001
         pass
 
-    return sorted(merged, key=lambda h: h.score, reverse=True)[:k]
+    streams = [s for s in [bm25_hits, vector_hits, graph_hits, extra_hits] if s]
+    if not streams:
+        return []
+
+    return sorted(_rrf_merge(streams), key=lambda h: h.score, reverse=True)[:k]
 
 
 def _run_qmd_search(
@@ -208,31 +209,29 @@ def _read_page_meta(path: Path) -> tuple[str, str]:
         return "", ""
 
 
-def _merge_hits(
-    bm25: list[QueryHit],
-    vector: list[QueryHit],
-    *,
-    bm25_weight: float = 0.4,
-    vector_weight: float = 0.6,
-    vault_path: Path,
-) -> list[QueryHit]:
-    """Reciprocal rank fusion of BM25 and vector hit lists."""
+def _rrf_merge(streams: list[list[QueryHit]]) -> list[QueryHit]:
+    """Reciprocal Rank Fusion (k=60) over arbitrary ranked streams.
+
+    Each stream contributes ``1 / (RRF_K + rank + 1)`` per document (rank is
+    0-indexed).  Documents are keyed by ``file_path`` when non-empty, else by
+    ``id``.  First-seen hit data is kept; scores accumulate across streams.
+    """
     scores: dict[str, float] = {}
-    by_path: dict[str, QueryHit] = {}
+    by_key: dict[str, QueryHit] = {}
 
-    for rank, hit in enumerate(bm25):
-        scores[hit.file_path] = scores.get(hit.file_path, 0.0) + bm25_weight * (1.0 / (rank + 1))
-        by_path[hit.file_path] = hit
+    for stream in streams:
+        for rank, hit in enumerate(stream):
+            key = hit.file_path or hit.id
+            if not key:
+                continue
+            scores[key] = scores.get(key, 0.0) + 1.0 / (RRF_K + rank + 1)
+            if key not in by_key:
+                by_key[key] = hit
 
-    for rank, hit in enumerate(vector):
-        scores[hit.file_path] = scores.get(hit.file_path, 0.0) + vector_weight * (1.0 / (rank + 1))
-        if hit.file_path not in by_path:
-            by_path[hit.file_path] = hit
-
-    merged = []
-    for fp, score in scores.items():
-        h = by_path[fp]
-        merged.append(
+    result = []
+    for key, score in scores.items():
+        h = by_key[key]
+        result.append(
             QueryHit(
                 id=h.id,
                 source=h.source,
@@ -242,9 +241,21 @@ def _merge_hits(
                 file_path=h.file_path,
                 last_seen=h.last_seen,
                 citations=h.citations,
+                via_graph=h.via_graph,
             )
         )
-    return merged
+    return result
+
+
+def _merge_hits(
+    bm25: list[QueryHit],
+    vector: list[QueryHit],
+    *,
+    vault_path: Path,  # kept for API compatibility
+    **_kwargs: object,
+) -> list[QueryHit]:
+    """RRF fusion of BM25 and vector hit lists (k=60)."""
+    return _rrf_merge([bm25, vector])
 
 
 def _expand_graph(
@@ -252,52 +263,62 @@ def _expand_graph(
     conn,
     vault_path: Path,
     k: int,
+    max_hops: int = 2,
 ) -> list[QueryHit]:
-    """Add one-hop graph neighbours of top-k hits (boosted score)."""
-    wiki_root = vault_path / "wiki"
-    by_id: dict[str, QueryHit] = {h.id: h for h in hits if h.id}
-    by_path: dict[str, QueryHit] = {h.file_path: h for h in hits}
+    """Multi-hop BFS graph expansion; returns a ranked stream for RRF fusion.
 
-    new_hits: list[QueryHit] = []
-    for hit in hits[:k]:
-        if not hit.id:
+    Traverses up to ``max_hops`` from the top-k seed hits using the
+    ``traverse()`` recursive CTE.  Returns only nodes not already in the seed
+    set, sorted by descending graph score so the list can be fed directly into
+    ``_rrf_merge`` as an independent ranked stream.
+    """
+    wiki_root = vault_path / "wiki"
+    start_ids = [h.id for h in hits[:k] if h.id]
+    if not start_ids:
+        return []
+
+    try:
+        reachable = traverse(conn, start_ids, max_hops=max_hops)
+    except Exception:  # noqa: BLE001
+        return []
+
+    seed_scores = {h.id: h.score for h in hits if h.id}
+    existing_ids = {h.id for h in hits}
+    existing_paths = {h.file_path for h in hits}
+    best_seed = max(seed_scores.values(), default=0.3)
+
+    graph_hits: list[QueryHit] = []
+    for page_id, hop_dist in reachable:
+        if hop_dist == 0 or page_id in existing_ids:
             continue
+        page_path = _find_page_by_id(wiki_root, page_id)
+        if not page_path or str(page_path) in existing_paths:
+            continue
+        graph_score = best_seed / (1.0 + hop_dist)
         try:
-            nbrs = neighbours(conn, hit.id, direction="both")
+            doc = md.read(page_path)
+            n_title = str(doc.frontmatter.get("title") or page_path.stem)
+            n_last = str(doc.frontmatter.get("last_confirmed") or "")
         except Exception:  # noqa: BLE001
-            continue
-        for src_id, edge_type, dst_id, confidence in nbrs:
-            neighbour_id = dst_id if src_id == hit.id else src_id
-            if neighbour_id in by_id:
-                continue
-            page_path = _find_page_by_id(wiki_root, neighbour_id)
-            if not page_path or str(page_path) in by_path:
-                continue
-            n_id, n_last = _read_page_meta(page_path)
-            try:
-                doc = md.read(page_path)
-                n_title = str(doc.frontmatter.get("title") or page_path.stem)
-                n_conf = float(doc.frontmatter.get("confidence") or 0.3)
-            except Exception:  # noqa: BLE001
-                n_title = page_path.stem
-                n_conf = 0.3
-            graph_score = hit.score * 0.5 * (confidence or 0.5)
-            gh = QueryHit(
-                id=neighbour_id,
+            n_title = page_path.stem
+            n_last = ""
+        graph_hits.append(
+            QueryHit(
+                id=page_id,
                 source=COLLECTION_NAME,
                 title=n_title,
-                snippet=f"[via {edge_type} from {hit.title}]",
+                snippet=f"[graph hop={hop_dist}]",
                 score=graph_score,
                 file_path=str(page_path),
                 last_seen=n_last,
                 citations=[str(page_path.relative_to(wiki_root))],
                 via_graph=True,
             )
-            new_hits.append(gh)
-            by_id[neighbour_id] = gh
-            by_path[str(page_path)] = gh
+        )
+        existing_ids.add(page_id)
+        existing_paths.add(str(page_path))
 
-    return hits + new_hits
+    return sorted(graph_hits, key=lambda h: h.score, reverse=True)
 
 
 def _find_page_by_id(wiki_root: Path, page_id: str) -> Path | None:

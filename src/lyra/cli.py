@@ -270,11 +270,13 @@ def _cmd_query(args: argparse.Namespace) -> int:
             print(f"index build failed: {exc}", file=sys.stderr)
             return 1
 
+    max_hops = args.max_hops if args.max_hops is not None else config.query.max_hops
     hits = hybrid_query(
         args.question,
         config.vault_path,
         k=args.top_k,
         use_vector=not args.bm25_only,
+        max_hops=max_hops,
     )
     print(format_results(hits, show_snippet=args.snippets))
     return 0 if hits else 1
@@ -437,6 +439,13 @@ def _build_parser() -> argparse.ArgumentParser:
     p_query.add_argument("--bm25-only", action="store_true", help="skip vector retrieval")
     p_query.add_argument("--snippets", action="store_true", default=True, help="show text snippets")
     p_query.add_argument("--no-snippets", dest="snippets", action="store_false")
+    p_query.add_argument(
+        "--max-hops",
+        type=int,
+        default=None,
+        metavar="N",
+        help="graph BFS depth 1-4 (default: from config.yaml query.max_hops, 2)",
+    )
     p_query.set_defaults(func=_cmd_query)
 
     p_session = sub.add_parser("session", help="export OpenCode sessions into raw/sessions/")

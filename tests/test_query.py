@@ -10,8 +10,10 @@ import pytest
 
 from lyra.query import (
     QueryHit,
+    RRF_K,
     _parse_qmd_output,
     _merge_hits,
+    _rrf_merge,
     format_results,
     hybrid_query,
 )
@@ -222,6 +224,63 @@ def test_hybrid_query_returns_list(tmp_path):
     assert isinstance(hits, list)
 
 
+# ---------------------------------------------------------------------------
+# Tests: _rrf_merge / RRF k=60 (M3.7)
+# ---------------------------------------------------------------------------
+
+
+def test_rrf_k_constant():
+    assert RRF_K == 60
+
+
+def test_rrf_merge_single_stream():
+    h = _make_hit("/wiki/a.md", 0.9, "U1")
+    result = _rrf_merge([[h]])
+    assert len(result) == 1
+    assert abs(result[0].score - 1.0 / (60 + 1)) < 1e-9
+
+
+def test_rrf_merge_deduplicates_across_streams():
+    h = _make_hit("/wiki/a.md", 0.9, "U1")
+    result = _rrf_merge([[h], [h]])
+    assert len(result) == 1
+    assert abs(result[0].score - 2.0 / 61) < 1e-9
+
+
+def test_rrf_merge_boosts_overlap():
+    shared = _make_hit("/wiki/shared.md", 0.9, "S")
+    unique = _make_hit("/wiki/unique.md", 0.5, "U")
+    result = _rrf_merge([[shared, unique], [shared]])
+    shared_hit = next(h for h in result if "shared" in h.file_path)
+    unique_hit = next(h for h in result if "unique" in h.file_path)
+    assert shared_hit.score > unique_hit.score
+
+
+def test_rrf_merge_three_streams():
+    a = _make_hit("/wiki/a.md", 0.9, "A")
+    b = _make_hit("/wiki/b.md", 0.7, "B")
+    c = _make_hit("/wiki/c.md", 0.5, "C")
+    result = _rrf_merge([[a], [b], [c]])
+    assert len(result) == 3
+
+
+def test_rrf_merge_empty_streams():
+    h = _make_hit("/wiki/a.md", 0.9)
+    result = _rrf_merge([[], [h], []])
+    assert len(result) == 1
+
+
+def test_merge_hits_uses_rrf(tmp_path):
+    vault = _make_vault(tmp_path)
+    shared = _make_hit("/wiki/shared.md", 0.9)
+    unique_b = _make_hit("/wiki/b.md", 0.8)
+    unique_v = _make_hit("/wiki/v.md", 0.7)
+    merged = _merge_hits([shared, unique_b], [shared, unique_v], vault_path=vault)
+    shared_hit = next(h for h in merged if "shared" in h.file_path)
+    b_hit = next(h for h in merged if "b.md" in h.file_path)
+    assert shared_hit.score > b_hit.score
+
+
 def test_hybrid_query_graph_expansion(tmp_path):
     vault = _make_vault(tmp_path)
     _write_page(vault, "transformers.md", "ULID001", "Transformers Architecture")
@@ -259,3 +318,72 @@ id: ULID001
     assert "ULID001" in ids
     graph_hits = [h for h in hits if h.via_graph]
     assert any(h.id == "ULID002" for h in graph_hits)
+
+
+def test_hybrid_query_multihop_two_hops(tmp_path):
+    vault = _make_vault(tmp_path)
+    _write_page(vault, "alpha.md", "ULID_A", "Alpha")
+    _write_page(vault, "beta.md", "ULID_B", "Beta")
+    _write_page(vault, "gamma.md", "ULID_C", "Gamma")
+
+    cfg = GraphProjectionConfig(db_path=tmp_path / "graph.sqlite")
+    conn = open_db(cfg)
+    upsert_from_vault(vault, conn)
+    today = "2026-05-07"
+    conn.execute("INSERT INTO edges VALUES ('ULID_A','supports','ULID_B',0.9,?)", (today,))
+    conn.execute("INSERT INTO edges VALUES ('ULID_B','uses','ULID_C',0.9,?)", (today,))
+    conn.commit()
+    conn.close()
+
+    mock_result = MagicMock(spec=subprocess.CompletedProcess)
+    mock_result.returncode = 0
+    mock_result.stdout = """\
+qmd://lyra-wiki/sources/alpha.md:1 #aa0001
+Title: Alpha
+Score:  90%
+
+@@ -1,2 @@
+id: ULID_A
+
+"""
+    with patch("lyra.query.subprocess.run", return_value=mock_result):
+        hits = hybrid_query("alpha", vault, k=10, graph_config=cfg, max_hops=2)
+
+    ids = [h.id for h in hits]
+    assert "ULID_A" in ids
+    # ULID_C is 2 hops away — should be reachable with max_hops=2
+    assert "ULID_C" in ids
+
+
+def test_hybrid_query_max_hops_one_does_not_reach_two_hops(tmp_path):
+    vault = _make_vault(tmp_path)
+    _write_page(vault, "alpha.md", "ULID_A", "Alpha")
+    _write_page(vault, "beta.md", "ULID_B", "Beta")
+    _write_page(vault, "gamma.md", "ULID_C", "Gamma")
+
+    cfg = GraphProjectionConfig(db_path=tmp_path / "graph2.sqlite")
+    conn = open_db(cfg)
+    upsert_from_vault(vault, conn)
+    today = "2026-05-07"
+    conn.execute("INSERT INTO edges VALUES ('ULID_A','supports','ULID_B',0.9,?)", (today,))
+    conn.execute("INSERT INTO edges VALUES ('ULID_B','uses','ULID_C',0.9,?)", (today,))
+    conn.commit()
+    conn.close()
+
+    mock_result = MagicMock(spec=subprocess.CompletedProcess)
+    mock_result.returncode = 0
+    mock_result.stdout = """\
+qmd://lyra-wiki/sources/alpha.md:1 #aa0001
+Title: Alpha
+Score:  90%
+
+@@ -1,2 @@
+id: ULID_A
+
+"""
+    with patch("lyra.query.subprocess.run", return_value=mock_result):
+        hits = hybrid_query("alpha", vault, k=10, graph_config=cfg, max_hops=1)
+
+    ids = [h.id for h in hits]
+    assert "ULID_B" in ids
+    assert "ULID_C" not in ids

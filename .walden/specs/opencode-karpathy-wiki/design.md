@@ -289,6 +289,62 @@ These ADRs are intentionally inline in the design document (not separate `.walde
 
 **Consequences.** No silent fading of knowledge. Git history is the audit trail. Errors and bug fixes from months ago remain visible and retrievable — they are the ones the user is about to forget.
 
+### ADR-9 Entity extraction strategy: agent-host LLM (preferred) + LiteLLM fallback; mode implicit from CLI flags
+
+**Context.** Karpathy Wiki V2 and `agentmemory` both perform LLM-driven entity extraction at compile/ingest time. `agentmemory` runs an always-on REST server (port 3111) that owns the LLM, called from session lifecycle hooks. Lyra cannot follow that pattern verbatim because **NFR7** forbids an always-on memory server in V1 and **NFR1** forbids requiring proprietary API keys for core functionality. We also want **full provider compatibility, including GitHub Copilot**, for the standalone path.
+
+**Decision.** Two complementary extraction paths, switched **implicitly by the form of the `lyra compile` invocation** — no env var, no global mode flag.
+
+1. **Agent-host path (preferred when running inside an agent session).** The Lyra skill (`skills/lyra/SKILL.md`, installed by `lyra install`) instructs the agent: when raw pages are pending (surfaced in the brief, after `lyra ingest`, or on user request), read each raw page, extract entities with the agent's own LLM using the documented prompt template, and apply via `lyra compile --raw-id <id> --entities '<json>'`. The CLI sub-form `--entities '<json>'` **bypasses any LLM call** — it applies the supplied entities deterministically (kind dispatch, frontmatter, graph edges, supersession). This is the signal "skip LLM, entities pre-extracted."
+2. **LiteLLM path (standalone fallback for cron, CI, and outside-session manual use).** `lyra compile` (no `--entities`) uses LiteLLM under the hood with the provider configured in `~/lyra/config.yaml: extraction.llm = {provider, model, ...}`. LiteLLM unifies OpenAI, Anthropic, Ollama, **GitHub Copilot**, Azure OpenAI, Bedrock, Vertex AI, Groq, Mistral, Cohere, etc. — single dependency, ~100 providers, idiomatic Python.
+3. **Heuristic baseline (always on).** Inline `entity::<type> <name>` annotations, `[[wikilinks]]` resolution to entity pages, frontmatter `entities: [...]`, regex patterns for file paths and Python/JS imports run regardless of provider. Guarantees minimum entity coverage even with no LLM available.
+
+The CLI is auto-explanatory: `lyra compile` (batch) uses LiteLLM-or-heuristic; `lyra compile --raw-id <id> --entities '<json>'` is a deterministic single-page primitive used by the agent. **Mode resolution is a property of the command, not a runtime flag.**
+
+**Consequences.** Inside an agent session the user never sets up API keys, never configures a provider; the host LLM (Claude / Copilot / Cursor / etc.) does the work via skill orchestration. Outside the session, LiteLLM provides full provider compatibility through a single dependency. NFR1 and NFR7 are honoured. Tests can exercise the deterministic path (`--entities`) without any LLM mocking. The skill becomes the single source of truth for the in-session prompt template.
+
+### ADR-10 Multi-hop graph traversal: BFS depth=2 default, RRF fusion (k=60) of BM25 + vector + graph
+
+**Context.** M1 hybrid retrieval combines BM25 + vector + **one-hop** graph extension. Karpathy Wiki V2 explicitly recommends multi-hop traversal: _"Start at the Redis node, walk outward through 'depends on' and 'uses' edges, find everything downstream"_. `agentmemory` ships **BFS traversal** triggered when entities are detected in the query, with **Reciprocal Rank Fusion (RRF, k=60)** combining the three retrieval streams. `agentmemory` reports 95.2% on LongMemEval-S using this fusion pattern.
+
+**Decision.** V1 (post-M3) replaces the one-hop graph extension with a configurable **BFS traversal via SQLite recursive CTE**:
+
+- `traverse(start_ids, max_hops, edge_types)` in `graph_projection.py`.
+- Default `max_hops = 2`, configurable via `~/lyra/config.yaml: query.max_hops`, capped at `4`.
+- Edge-type filter excludes `contradicts` and `superseded_by` from BFS expansion (those describe history, not navigation).
+- Per-query result-size cap to prevent expansion explosion on dense graphs.
+- `lyra query` exposes `--max-hops N` for ad-hoc tuning.
+
+Final ranking uses **Reciprocal Rank Fusion with `k=60`**, combining the BM25, vector, and graph-traversal streams. RRF is parameter-light, robust to different score scales, and matches the agentmemory result-quality benchmark.
+
+**Consequences.** Two-hop traversal captures the dominant association pattern in personal knowledge graphs ("page → entity → other-page-mentioning-same-entity") without the noise of three-plus hops on small graphs. Recursive CTE keeps the projection in SQLite (no new dependency). RRF fusion replaces ad-hoc score addition and is documented as the merge primitive for any future stream addition.
+
+### ADR-11 Auto-supersession via weighted score on contradiction; threshold-gated; both pages preserved
+
+**Context.** ADR-8 establishes explicit supersession as the primary lifecycle primitive (no decay). Karpathy Wiki V2 takes this further: _"The LLM should propose which claim is more likely correct based on **source recency, source authority, and the number of supporting observations**. The human can override, but the default behavior should usually be right."_ Without an automatic resolution rule, contradictions linger in lint reports and the wiki accumulates unresolved tension.
+
+**Decision.** At compile time, when `A contradicts:: B` (or vice versa) and neither side has an existing `supersedes` / `superseded_by` link to the other, score both pages:
+
+```
+score(p) = w_r · recency(p) + w_a · authority(p) + w_s · support(p)
+
+defaults:  w_r = 0.5    w_a = 0.3    w_s = 0.2
+           threshold τ = 0.2
+```
+
+- `recency(p)`: normalised `last_confirmed` timestamp (more recent = higher).
+- `authority(p)`: function of cited `sources:` count + `quality: high|medium|low` weight.
+- `support(p)`: count of inbound `supports::` edges in the graph projection.
+
+Decision rule:
+
+- If `|score(A) − score(B)| ≥ τ`: auto-set `winner.supersedes = [loser.id]` and `loser.superseded_by = winner.id`. Emit a decision-log entry containing the score breakdown.
+- If `|score(A) − score(B)| < τ`: leave the contradiction unresolved; `lyra lint` surfaces it as **needs human resolution** with the score breakdown attached.
+
+**Both pages are always preserved**, consistent with ADR-8. Auto-supersession edits frontmatter, never deletes content. Weights and threshold are configurable via `~/lyra/config.yaml: auto_supersession = {enabled, weights, threshold}`. Default is `enabled: true` because the design.md goal explicitly mandates "auto-supersession via contradiction detection at compile time" (M3 vertical).
+
+**Consequences.** Most contradictions resolve without human intervention; only genuinely ambiguous ones (close score) reach lint. The score breakdown makes every auto-decision auditable. Conservative threshold (`0.2`) prefers human review over silent overwrite when signals disagree. Numeric weights are tunable but exposed only via config — they are not "false-precision confidence floats on individual claims" (the gist's critique), they are a **resolution heuristic**, applied once per contradiction and logged.
+
 ## Error Handling
 
 - Missing or unwritable vault path: fail fast during install and runtime discovery.

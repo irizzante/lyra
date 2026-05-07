@@ -18,6 +18,11 @@ SCHEMA_VERSION = 1
 
 
 @dataclass
+class QueryConfig:
+    max_hops: int = 2
+
+
+@dataclass
 class SourceConfig:
     name: str
     type: str
@@ -31,6 +36,7 @@ class Config:
     vault_path: Path
     sources: list[SourceConfig] = field(default_factory=list)
     schema_version: int = SCHEMA_VERSION
+    query: QueryConfig = field(default_factory=QueryConfig)
 
     @classmethod
     def default(cls, vault_path: Path) -> Config:
@@ -53,10 +59,13 @@ class Config:
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> Config:
         sources = [SourceConfig(**s) for s in data.get("sources", [])]
+        query_data = data.get("query") or {}
+        query = QueryConfig(max_hops=int(query_data.get("max_hops", 2)))
         return cls(
             vault_path=Path(data["vault_path"]),
             sources=sources,
             schema_version=data.get("schema_version", SCHEMA_VERSION),
+            query=query,
         )
 
 

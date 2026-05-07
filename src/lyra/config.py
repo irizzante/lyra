@@ -32,11 +32,26 @@ class SourceConfig:
 
 
 @dataclass
+class AutoSupersessionWeights:
+    recency: float = 0.5
+    authority: float = 0.3
+    support: float = 0.2
+
+
+@dataclass
+class AutoSupersessionConfig:
+    enabled: bool = True
+    weights: AutoSupersessionWeights = field(default_factory=AutoSupersessionWeights)
+    threshold: float = 0.2
+
+
+@dataclass
 class Config:
     vault_path: Path
     sources: list[SourceConfig] = field(default_factory=list)
     schema_version: int = SCHEMA_VERSION
     query: QueryConfig = field(default_factory=QueryConfig)
+    auto_supersession: AutoSupersessionConfig = field(default_factory=AutoSupersessionConfig)
 
     @classmethod
     def default(cls, vault_path: Path) -> Config:
@@ -61,11 +76,23 @@ class Config:
         sources = [SourceConfig(**s) for s in data.get("sources", [])]
         query_data = data.get("query") or {}
         query = QueryConfig(max_hops=int(query_data.get("max_hops", 2)))
+        as_data = data.get("auto_supersession") or {}
+        w_data = as_data.get("weights") or {}
+        auto_supersession = AutoSupersessionConfig(
+            enabled=as_data.get("enabled", True),
+            weights=AutoSupersessionWeights(
+                recency=w_data.get("recency", 0.5),
+                authority=w_data.get("authority", 0.3),
+                support=w_data.get("support", 0.2),
+            ),
+            threshold=as_data.get("threshold", 0.2),
+        )
         return cls(
             vault_path=Path(data["vault_path"]),
             sources=sources,
             schema_version=data.get("schema_version", SCHEMA_VERSION),
             query=query,
+            auto_supersession=auto_supersession,
         )
 
 

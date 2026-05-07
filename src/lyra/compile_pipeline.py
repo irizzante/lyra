@@ -23,7 +23,7 @@ relations are merged; existing typed relations are preserved.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import date
 from pathlib import Path
 from typing import Iterable
@@ -43,6 +43,7 @@ class CompileReport:
     updated: list[Path]
     skipped: list[Path]
     errors: list[tuple[Path, str]]
+    supersession_decisions: list[dict] = field(default_factory=list)
 
 
 def compile_vault(vault_path: Path) -> CompileReport:
@@ -67,11 +68,188 @@ def compile_vault(vault_path: Path) -> CompileReport:
     title_to_page = _build_title_index(vault_path)
     _resolve_pending_relations(vault_path, title_to_page)
 
+    # Pass 3: auto-supersession scoring on unresolved contradictions (ADR-11).
+    _auto_supersede_pass(vault_path, report)
+
     _regen_index(vault_path)
     _append_log(vault_path, report)
     _upsert_graph(vault_path)
     return report
 
+
+# ------------------------------------------------------------------
+# M3.8 — Auto-supersession scoring (ADR-11)
+# ------------------------------------------------------------------
+
+def score_page(
+    page_id: str,
+    fm: dict,
+    wiki_index: dict[str, dict],
+    all_dates: list[str],
+    weights: object,
+) -> dict:
+    """Score a page for auto-supersession. Returns component breakdown + total.
+
+    Components:
+      recency   — normalised last_confirmed date (0=oldest, 1=newest)
+      authority — normalised source count (cap 5)
+      support   — normalised inbound 'supports' edge count (cap 5)
+    """
+    rec = _recency(str(fm.get("last_confirmed") or ""), all_dates)
+    auth = _authority(fm)
+    sup = _inbound_supports(page_id, wiki_index)
+    total = weights.recency * rec + weights.authority * auth + weights.support * sup
+    return {
+        "recency": round(rec, 4),
+        "authority": round(auth, 4),
+        "support": round(sup, 4),
+        "total": round(total, 4),
+    }
+
+
+def _recency(date_str: str, all_dates: list[str]) -> float:
+    valid = sorted(d for d in all_dates if d)
+    if not valid or not date_str:
+        return 0.0
+    if valid[0] == valid[-1]:
+        return 1.0
+    if date_str <= valid[0]:
+        return 0.0
+    if date_str >= valid[-1]:
+        return 1.0
+    try:
+        d = date.fromisoformat(date_str)
+        dmin = date.fromisoformat(valid[0])
+        dmax = date.fromisoformat(valid[-1])
+        return (d - dmin).days / (dmax - dmin).days
+    except ValueError:
+        return 0.0
+
+
+def _authority(fm: dict) -> float:
+    sources = fm.get("sources") or []
+    n = len(sources) if isinstance(sources, list) else 0
+    return min(1.0, n / 5.0)
+
+
+def _inbound_supports(page_id: str, wiki_index: dict[str, dict]) -> float:
+    count = sum(
+        1
+        for fmx in wiki_index.values()
+        for rel in (fmx.get("relations") or [])
+        if isinstance(rel, dict)
+        and rel.get("type") == "supports"
+        and str(rel.get("target_id") or "") == page_id
+    )
+    return min(1.0, count / 5.0)
+
+
+def _already_superseded(
+    page_id: str, target_id: str, fm: dict, wiki_index: dict[str, dict]
+) -> bool:
+    supersedes = {str(t) for t in (fm.get("supersedes") or [])}
+    superseded_by = str(fm.get("superseded_by") or "")
+    if target_id in supersedes or superseded_by == target_id:
+        return True
+    target_fm = wiki_index.get(target_id, {})
+    target_supersedes = {str(t) for t in (target_fm.get("supersedes") or [])}
+    target_superseded_by = str(target_fm.get("superseded_by") or "")
+    return page_id in target_supersedes or target_superseded_by == page_id
+
+
+def _build_page_index(vault_path: Path) -> dict[str, dict]:
+    """page_id → frontmatter+_path for all wiki pages."""
+    out: dict[str, dict] = {}
+    wiki_root = vault_path / "wiki"
+    if not wiki_root.exists():
+        return out
+    for path in wiki_root.rglob("*.md"):
+        if path.name in {"index.md", "log.md", "AGENTS.md"}:
+            continue
+        try:
+            doc = md.read(path)
+            page_id = doc.frontmatter.get("id")
+            if page_id:
+                fm = dict(doc.frontmatter)
+                fm["_path"] = path
+                out[str(page_id)] = fm
+        except Exception:  # noqa: BLE001
+            pass
+    return out
+
+
+def _auto_supersede_pass(vault_path: Path, report: CompileReport) -> None:
+    """Pass 3 (M3.8/ADR-11): auto-supersession scoring on unresolved contradictions."""
+    from lyra import config as cfg_mod
+
+    try:
+        cfg = cfg_mod.load(cfg_mod.CONFIG_PATH)
+        as_cfg = cfg.auto_supersession
+    except Exception:  # noqa: BLE001 — no config → use defaults
+        as_cfg = cfg_mod.AutoSupersessionConfig()
+
+    if not as_cfg.enabled:
+        return
+
+    wiki_index = _build_page_index(vault_path)
+    all_dates = [str(fm.get("last_confirmed") or "") for fm in wiki_index.values()]
+
+    seen: set[frozenset] = set()
+    for page_id, fm in wiki_index.items():
+        contradicts = [str(t) for t in (fm.get("contradicts") or [])]
+        for target_id in contradicts:
+            pair: frozenset = frozenset({page_id, target_id})
+            if pair in seen:
+                continue
+            seen.add(pair)
+
+            if _already_superseded(page_id, target_id, fm, wiki_index):
+                continue
+
+            target_fm = wiki_index.get(target_id)
+            if not target_fm:
+                continue
+
+            score_a = score_page(page_id, fm, wiki_index, all_dates, as_cfg.weights)
+            score_b = score_page(target_id, target_fm, wiki_index, all_dates, as_cfg.weights)
+            diff = abs(score_a["total"] - score_b["total"])
+
+            if diff < as_cfg.threshold:
+                continue  # lint will surface with score breakdown
+
+            if score_a["total"] >= score_b["total"]:
+                winner_id, winner_path = page_id, fm["_path"]
+                loser_id, loser_path = target_id, target_fm["_path"]
+                winner_score, loser_score = score_a["total"], score_b["total"]
+            else:
+                winner_id, winner_path = target_id, target_fm["_path"]
+                loser_id, loser_path = page_id, fm["_path"]
+                winner_score, loser_score = score_b["total"], score_a["total"]
+
+            w_doc = md.read(winner_path)
+            w_sup = [str(x) for x in (w_doc.frontmatter.get("supersedes") or [])]
+            if loser_id not in w_sup:
+                w_sup.append(loser_id)
+                w_doc.frontmatter["supersedes"] = w_sup
+                md.write(winner_path, w_doc)
+
+            l_doc = md.read(loser_path)
+            l_doc.frontmatter["superseded_by"] = winner_id
+            md.write(loser_path, l_doc)
+
+            report.supersession_decisions.append({
+                "winner": winner_id,
+                "loser": loser_id,
+                "winner_score": round(winner_score, 3),
+                "loser_score": round(loser_score, 3),
+                "diff": round(diff, 3),
+                "threshold": as_cfg.threshold,
+            })
+
+
+# ------------------------------------------------------------------
+# Promotion helpers
+# ------------------------------------------------------------------
 
 def _resolve_pending_relations(vault_path: Path, title_to_page: dict[str, dict]) -> None:
     wiki_root = vault_path / "wiki"
@@ -314,10 +492,12 @@ def _upsert_graph(vault_path: Path) -> None:
 def _append_log(vault_path: Path, report: CompileReport) -> None:
     log_path = vault_path / "wiki" / "log.md"
     today = date.today().isoformat()
+    decisions = len(report.supersession_decisions)
     line = (
         f"- {today} — promoted={len(report.promoted)} "
         f"updated={len(report.updated)} skipped={len(report.skipped)} "
         f"errors={len(report.errors)}"
+        + (f" auto_superseded={decisions}" if decisions else "")
     )
     existing = log_path.read_text(encoding="utf-8") if log_path.exists() else ""
     log_path.write_text(existing + line + "\n", encoding="utf-8")

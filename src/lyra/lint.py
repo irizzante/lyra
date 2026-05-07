@@ -238,7 +238,25 @@ def _check_contradictions(
     wiki_index: dict[str, dict],
     report: LintReport,
 ) -> None:
-    """Contradictions with no supersession on either side (ADR-8: explicit supersession primary)."""
+    """Contradictions with no supersession on either side (ADR-8 / M3.9).
+
+    Attaches auto-supersession score breakdown to each unresolved contradiction
+    so the operator can see why compile did not auto-resolve it (score diff < τ).
+    """
+    from lyra.compile_pipeline import score_page
+    from lyra import config as cfg_mod
+
+    try:
+        cfg = cfg_mod.load(cfg_mod.CONFIG_PATH)
+        weights = cfg.auto_supersession.weights
+        threshold = cfg.auto_supersession.threshold
+    except Exception:  # noqa: BLE001
+        weights = cfg_mod.AutoSupersessionWeights()
+        threshold = 0.2
+
+    all_dates = [str(fm.get("last_confirmed") or "") for fm in wiki_index.values()]
+
+    seen: set[frozenset] = set()
     for page_id, fm in wiki_index.items():
         path = fm["_path"]
         contradicts = [str(t) for t in (fm.get("contradicts") or [])]
@@ -249,6 +267,11 @@ def _check_contradictions(
         superseded_by = str(fm.get("superseded_by") or "")
 
         for target_id in contradicts:
+            pair: frozenset = frozenset({page_id, target_id})
+            if pair in seen:
+                continue
+            seen.add(pair)
+
             if target_id in supersedes or superseded_by == target_id:
                 continue
             target_fm = wiki_index.get(target_id, {})
@@ -256,15 +279,25 @@ def _check_contradictions(
             target_superseded_by = str(target_fm.get("superseded_by") or "")
             if page_id in target_supersedes or target_superseded_by == page_id:
                 continue
+
+            score_a = score_page(page_id, fm, wiki_index, all_dates, weights)
+            score_b = score_page(target_id, target_fm, wiki_index, all_dates, weights)
+            diff = round(abs(score_a["total"] - score_b["total"]), 3)
+
             report.issues.append(
                 LintIssue(
                     kind="CONTRADICTION",
                     path=path,
                     message=(
-                        f"page {page_id!r} contradicts {target_id!r} "
-                        "with no supersession on either side"
+                        f"page {page_id!r} contradicts {target_id!r} — "
+                        f"needs human resolution (score diff {diff:.3f} < τ={threshold:.2f})"
                     ),
-                    detail={"contradicts": target_id},
+                    detail={
+                        "contradicts": target_id,
+                        "scores": {page_id: score_a, target_id: score_b},
+                        "diff": diff,
+                        "threshold": threshold,
+                    },
                 )
             )
 

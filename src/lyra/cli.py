@@ -351,6 +351,14 @@ def _cmd_lint(args: argparse.Namespace) -> int:
 
     for issue in report.issues:
         print(f"[{issue.kind}] {issue.path.name}: {issue.message}")
+        if issue.kind == "CONTRADICTION" and issue.detail.get("scores"):
+            for pid, sc in issue.detail["scores"].items():
+                print(
+                    f"  {pid}: recency={sc['recency']:.3f}"
+                    f" authority={sc['authority']:.3f}"
+                    f" support={sc['support']:.3f}"
+                    f" → total={sc['total']:.3f}"
+                )
     print(f"\n{len(report.issues)} issue(s) found")
     return 1
 

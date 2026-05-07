@@ -89,6 +89,84 @@ relations:                   # typed graph edges
 
 ---
 
+### Entity pages (`wiki/entities/<entity_type>/<ulid>-<slug>.md`)
+
+Entity pages represent first-class named things extracted from sources (M3, ADR-9).
+
+```yaml
+id: <ULID>                     # durable canonical identity
+type: entity
+entity_type: person | project | library | concept | file | decision
+title: <canonical name>
+aliases: [<alternative name>, ...]
+attributes: {<key>: <value>}   # arbitrary entity-specific attributes
+created: <ISO 8601 date>
+last_confirmed: <ISO 8601 date>
+mentioned_by: [<source-page-ULID>, ...]  # source pages that reference this entity
+supersedes: []
+superseded_by: null
+relations: []
+```
+
+Entity pages are created and updated automatically by `lyra compile` via entity extraction.
+Do not create or edit entity pages manually; they are regenerated from raw annotations.
+
+---
+
+## Raw promotion workflow (M3, ADR-9)
+
+When `lyra brief` shows **N raw pages pending promotion**, use this workflow to promote them
+with the full power of the agent's own LLM:
+
+1. **Read** the raw page body.
+2. **Extract entities** using the prompt template below.
+3. **Apply** with `lyra compile --raw-id <id> --entities '<json>'`.
+
+### Entity extraction prompt template
+
+```
+Extract entities from the following text.
+
+Return ONLY a JSON list (no prose) where each item has:
+  - "entity_type": one of concept, decision, file, library, person, project
+  - "name": canonical name
+  - "aliases": list of alternate names (may be empty)
+  - "attributes": dict of extra attributes (may be empty)
+
+Text:
+<paste raw page body>
+```
+
+### Entity JSON schema example
+
+```json
+[
+  {"entity_type": "library",  "name": "litellm",         "aliases": ["LiteLLM"],  "attributes": {}},
+  {"entity_type": "person",   "name": "Andrej Karpathy", "aliases": ["Karpathy"], "attributes": {}},
+  {"entity_type": "project",  "name": "nanoGPT",         "aliases": [],           "attributes": {}},
+  {"entity_type": "concept",  "name": "BM25",            "aliases": [],           "attributes": {"tier": "semantic"}},
+  {"entity_type": "file",     "name": "src/lyra/cli.py", "aliases": [],           "attributes": {}},
+  {"entity_type": "decision", "name": "ADR-9",           "aliases": [],           "attributes": {}}
+]
+```
+
+### Inline annotation syntax (for future raw pages)
+
+Annotate entities inline in the raw body for heuristic extraction:
+
+```
+entity::<type> <name>
+```
+
+Examples:
+```
+entity::library litellm
+entity::person Andrej Karpathy
+entity::project nanoGPT
+```
+
+---
+
 ## Relation taxonomy
 
 Use inline annotations in raw body or the `relations:` frontmatter list:

@@ -12,7 +12,7 @@ from pathlib import Path
 
 from lyra import __version__
 from lyra import config as cfg_mod
-from lyra.compile_pipeline import compile_vault
+from lyra.compile_pipeline import compile_page, compile_vault
 from lyra.ingest import ingest as do_ingest
 from lyra.sources.karpathy_wiki import KarpathyWikiSource
 from lyra.vault import ensure_layout
@@ -197,10 +197,39 @@ def _cmd_compile(args: argparse.Namespace) -> int:
         print(str(exc), file=sys.stderr)
         return 1
 
-    report = compile_vault(config.vault_path)
+    ext = config.extraction
+    raw_id: str | None = getattr(args, "raw_id", None)
+    entities_json: str | None = getattr(args, "entities", None)
+
+    if raw_id:
+        # M3.4 — imperative single-page mode
+        try:
+            report = compile_page(
+                raw_id,
+                config.vault_path,
+                entities_json=entities_json,
+                extraction_provider=ext.provider,
+                extraction_model=ext.model,
+                extraction_endpoint=ext.endpoint,
+                extraction_extra=ext.extra or None,
+            )
+        except ValueError as exc:
+            print(f"error: {exc}", file=sys.stderr)
+            return 1
+    else:
+        # Batch mode
+        report = compile_vault(
+            config.vault_path,
+            extraction_provider=ext.provider,
+            extraction_model=ext.model,
+            extraction_endpoint=ext.endpoint,
+            extraction_extra=ext.extra or None,
+        )
+
     print(f"promoted: {len(report.promoted)}")
     print(f"updated:  {len(report.updated)}")
     print(f"skipped:  {len(report.skipped)}")
+    print(f"entities: {report.entities_upserted}")
     print(f"errors:   {len(report.errors)}")
     for path, message in report.errors:
         print(f"  ! {path}: {message}", file=sys.stderr)
@@ -416,6 +445,19 @@ def _build_parser() -> argparse.ArgumentParser:
 
     p_compile = sub.add_parser(
         "compile", help="promote raw research/clips into wiki/sources/"
+    )
+    p_compile.add_argument(
+        "--raw-id",
+        dest="raw_id",
+        default=None,
+        metavar="ID",
+        help="compile a single raw page by its raw_id (imperative mode, M3.4)",
+    )
+    p_compile.add_argument(
+        "--entities",
+        default=None,
+        metavar="JSON",
+        help="pre-extracted entities as JSON list; requires --raw-id; skips LLM call",
     )
     p_compile.set_defaults(func=_cmd_compile)
 

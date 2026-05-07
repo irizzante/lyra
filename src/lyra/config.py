@@ -46,9 +46,45 @@ class AutoSupersessionConfig:
 
 
 @dataclass
+class ExtractionConfig:
+    """LLM provider for entity extraction (M3.5).
+
+    When ``provider`` is empty, entity extraction falls back to the heuristic
+    baseline (no LLM call, no API key required — NFR1).
+    """
+
+    provider: str = ""
+    model: str = ""
+    endpoint: str = ""
+    extra: dict[str, Any] = field(default_factory=dict)
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> ExtractionConfig:
+        return cls(
+            provider=str(data.get("provider") or ""),
+            model=str(data.get("model") or ""),
+            endpoint=str(data.get("endpoint") or ""),
+            extra={k: v for k, v in data.items() if k not in ("provider", "model", "endpoint")},
+        )
+
+    def to_dict(self) -> dict[str, Any]:
+        d: dict[str, Any] = {}
+        if self.provider:
+            d["provider"] = self.provider
+        if self.model:
+            d["model"] = self.model
+        if self.endpoint:
+            d["endpoint"] = self.endpoint
+        if self.extra:
+            d.update(self.extra)
+        return d
+
+
+@dataclass
 class Config:
     vault_path: Path
     sources: list[SourceConfig] = field(default_factory=list)
+    extraction: ExtractionConfig = field(default_factory=ExtractionConfig)
     schema_version: int = SCHEMA_VERSION
     query: QueryConfig = field(default_factory=QueryConfig)
     auto_supersession: AutoSupersessionConfig = field(default_factory=AutoSupersessionConfig)
@@ -69,6 +105,12 @@ class Config:
     def to_dict(self) -> dict[str, Any]:
         data = asdict(self)
         data["vault_path"] = str(self.vault_path)
+        # ExtractionConfig: only write if non-empty to keep config files clean
+        ext_dict = self.extraction.to_dict()
+        if ext_dict:
+            data["extraction"] = {"llm": ext_dict}
+        else:
+            data.pop("extraction", None)
         return data
 
     @classmethod
@@ -87,9 +129,12 @@ class Config:
             ),
             threshold=as_data.get("threshold", 0.2),
         )
+        ext_raw = (data.get("extraction") or {}).get("llm") or {}
+        extraction = ExtractionConfig.from_dict(ext_raw) if ext_raw else ExtractionConfig()
         return cls(
             vault_path=Path(data["vault_path"]),
             sources=sources,
+            extraction=extraction,
             schema_version=data.get("schema_version", SCHEMA_VERSION),
             query=query,
             auto_supersession=auto_supersession,

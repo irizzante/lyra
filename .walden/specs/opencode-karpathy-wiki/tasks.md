@@ -224,36 +224,36 @@ Goal: extract entities (people, projects, libraries, concepts, files, decisions)
       - command: ["grep", "-q", "ADR-10", ".walden/specs/opencode-karpathy-wiki/design.md"]
       - command: ["grep", "-q", "ADR-11", ".walden/specs/opencode-karpathy-wiki/design.md"]
 
-- [⏳] 21. M3.1 — Entity model and first-class wiki pages
-  - [⏳] 21.1 Define entity page schema: frontmatter `type: entity`, `entity_type: person|project|library|concept|file|decision`, `aliases: [...]`, `attributes: {...}`, ULID `id:`; ensure-layout for `wiki/entities/<entity_type>/` directories in `vault.py`; document conventions in canonical `wiki/AGENTS.md` template (`R14.AC2`)
+- [✅] 21. M3.1 — Entity model and first-class wiki pages
+  - [✅] 21.1 Define entity page schema: frontmatter `type: entity`, `entity_type: person|project|library|concept|file|decision`, `aliases: [...]`, `attributes: {...}`, ULID `id:`; ensure-layout for `wiki/entities/<entity_type>/` directories in `vault.py`; document conventions in canonical `wiki/AGENTS.md` template (`R14.AC2`)
     - Requirements: `R6.AC1`–`R6.AC8`, `R14.AC2`–`R14.AC4`, `R15.AC1`–`R15.AC4`
     - Design: `Components > Schema Document`, `Cross-reference Model`, ADR-9
     - Verification:
       - command: ["uv", "run", "pytest", "-q", "tests/test_entity_model.py"]
 
-- [⏳] 22. M3.2 — Heuristic entity extractor (deterministic baseline)
-  - [⏳] 22.1 Implement `src/lyra/extract/heuristic.py`: parse inline `entity::<type> <name>` annotations; resolve `[[wikilinks]]` whose target page has `type: entity`; read declarative frontmatter `entities: [...]` field; regex patterns for file paths (e.g. `src/foo.py`) and Python/JS imports; return `list[ExtractedEntity]` with type, name, aliases, mention positions
+- [✅] 22. M3.2 — Heuristic entity extractor (deterministic baseline)
+  - [✅] 22.1 Implement `src/lyra/extract/heuristic.py`: parse inline `entity::<type> <name>` annotations; resolve `[[wikilinks]]` whose target page has `type: entity`; read declarative frontmatter `entities: [...]` field; regex patterns for file paths (e.g. `src/foo.py`) and Python/JS imports; return `list[ExtractedEntity]` with type, name, aliases, mention positions
     - Requirements: `R6.AC1`–`R6.AC8`, `R11.AC3`, `R11.AC4`
     - Design: `Cross-reference Model`, ADR-9
     - Verification:
       - command: ["uv", "run", "pytest", "-q", "tests/test_heuristic_extractor.py"]
 
-- [⏳] 23. M3.3 — Compile pipeline integration with extraction provider abstraction
-  - [⏳] 23.1 Wire heuristic + provider abstraction in `compile_pipeline`: heuristic always runs; if `extraction.llm.provider` configured AND no `--entities` flag passed, call provider; merge heuristic + LLM results (dedup on `entity_type+name`); upsert entity pages under `wiki/entities/<entity_type>/<ulid>-<slug>.md`; add `mentions(src_id, entity_id, confidence)` graph edges to projection
+- [✅] 23. M3.3 — Compile pipeline integration with extraction provider abstraction
+  - [✅] 23.1 Wire heuristic + provider abstraction in `compile_pipeline`: heuristic always runs; if `extraction.llm.provider` configured AND no `--entities` flag passed, call provider; merge heuristic + LLM results (dedup on `entity_type+name`); upsert entity pages under `wiki/entities/<entity_type>/<ulid>-<slug>.md`; add `mentions(src_id, entity_id, confidence)` graph edges to projection
     - Requirements: `R6.AC1`–`R6.AC8`, `R11.AC1`, `R11.AC4`
     - Design: `Components > Promotion Pipeline Layer`, ADR-9
     - Verification:
       - command: ["uv", "run", "pytest", "-q", "tests/test_compile_extraction.py"]
 
-- [⏳] 24. M3.4 — `lyra compile` imperative single-page mode (`--raw-id` + `--entities`)
-  - [⏳] 24.1 Add `--raw-id <id>` and `--entities '<json>'` flags to `lyra compile`; when `--entities` present → skip provider call, validate JSON schema, apply entities deterministically; idempotent across re-runs; clear error on malformed JSON or unknown entity type
+- [✅] 24. M3.4 — `lyra compile` imperative single-page mode (`--raw-id` + `--entities`)
+  - [✅] 24.1 Add `--raw-id <id>` and `--entities '<json>'` flags to `lyra compile`; when `--entities` present → skip provider call, validate JSON schema, apply entities deterministically; idempotent across re-runs; clear error on malformed JSON or unknown entity type
     - Requirements: `R5.AC1`, `R6.AC1`–`R6.AC8`, `R10.AC1`
     - Design: `Components > Lyra Public Interface`, ADR-9
     - Verification:
       - command: ["uv", "run", "pytest", "-q", "tests/test_compile_imperative.py"]
 
-- [⏳] 25. M3.5 — LiteLLM provider for batch compile (Mode B)
-  - [⏳] 25.1 Add `litellm` as optional extras dep (`extraction`); extend `config.py` with `extraction.llm = {provider, model, endpoint?, ...}`; implement thin wrapper `src/lyra/extract/llm.py` calling `litellm.completion` with structured JSON schema prompt; supports `openai`, `anthropic`, `ollama`, `github_copilot`, `azure`, `bedrock`, etc.; graceful fallback to heuristic with warning when provider unreachable (preserves NFR1: no API key required for core)
+- [✅] 25. M3.5 — LiteLLM provider for batch compile (Mode B)
+  - [✅] 25.1 Add `litellm` as optional extras dep (`extraction`); extend `config.py` with `extraction.llm = {provider, model, endpoint?, ...}`; implement thin wrapper `src/lyra/extract/llm.py` calling `litellm.completion` with structured JSON schema prompt; supports `openai`, `anthropic`, `ollama`, `github_copilot`, `azure`, `bedrock`, etc.; graceful fallback to heuristic with warning when provider unreachable (preserves NFR1: no API key required for core)
     - Requirements: `R6.AC1`–`R6.AC8`, `R10.AC6`, `NFR1`
     - Design: `Components > Promotion Pipeline Layer`, ADR-9
     - Verification:

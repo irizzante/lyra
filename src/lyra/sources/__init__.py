@@ -10,6 +10,22 @@ if TYPE_CHECKING:
     from lyra.config import Config, SourceConfig
     from lyra.sources.base import Source
 
+from lyra.sources.agentmemory import AgentmemorySource
+from lyra.sources.karpathy_wiki import KarpathyWikiSource
+from lyra.sources.mcp_memory import McpMemorySource
+from lyra.sources.obsidian_tasks import ObsidianTasksSource
+from lyra.sources.plain_markdown import PlainMarkdownSource
+
+__all__ = [
+    "AgentmemorySource",
+    "KarpathyWikiSource",
+    "McpMemorySource",
+    "ObsidianTasksSource",
+    "PlainMarkdownSource",
+    "load_source",
+    "load_all_sources",
+]
+
 _BUILTIN_ADAPTERS: dict[str, str] = {
     "karpathy_wiki": "lyra.sources.karpathy_wiki.KarpathyWikiSource",
     "obsidian_tasks": "lyra.sources.obsidian_tasks.ObsidianTasksSource",
@@ -36,7 +52,6 @@ def load_source(source_cfg: SourceConfig, vault_path: Any = None) -> Source:
     kwargs: dict[str, Any] = dict(source_cfg.options)
     if vault_path is not None and source_cfg.type in ("karpathy_wiki", "obsidian_tasks"):
         kwargs.setdefault("vault_path", Path(vault_path))
-    # Coerce any vault_path string to Path (options are stored as strings in YAML).
     if "vault_path" in kwargs:
         kwargs["vault_path"] = Path(kwargs["vault_path"])
 

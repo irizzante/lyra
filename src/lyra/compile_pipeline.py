@@ -1,28 +1,42 @@
-"""M1.4 — compile pipeline: raw → wiki/sources/ (ADR-6: flat raw/).
+"""M1.4 / M3.3 / M3.4 — compile pipeline: raw → wiki/ (ADR-6, ADR-9).
 
-Iterates ``raw/*.md`` flat and promotes records whose ``kind:`` frontmatter is
-``research`` or ``clip`` into ``wiki/sources/``.  Sessions (``kind: session``)
-are deferred to a later vertical.  Canonical wiki frontmatter:
+Batch mode (``compile_vault``):
+  Iterates ``raw/*.md`` flat and promotes research/clip records into
+  ``wiki/sources/``. Additionally runs entity extraction and upserts entity
+  pages under ``wiki/entities/<entity_type>/``.
 
+Imperative mode (``compile_page`` — M3.4):
+  Single-page compile for use by the Lyra skill inside an agent session.
+  ``entities_json`` present → skip provider call (entities pre-extracted).
+  ``entities_json`` absent  → same provider logic as batch.
+
+Entity extraction (M3.3, ADR-9):
+  - Heuristic baseline always runs (``lyra.extract.heuristic``).
+  - If ``extraction.llm.provider`` is configured AND ``--entities`` not passed,
+    LiteLLM is called for richer extraction (``lyra.extract.llm``).
+  - Results are merged/deduped on ``(entity_type, name)``.
+  - Entity pages: ``wiki/entities/<entity_type>/<ulid>-<slug>.md``
+  - Graph edges: ``mentions(src_id, entity_id, confidence)`` written to the
+    graph DB projection.
+
+Canonical wiki-source frontmatter:
 ```yaml
 id: <ULID>          # durable canonical identity
 type: source
 sources: [<raw_id>, ...]
-confidence: 0.5     # default for ingested research; refined over time
+confidence: 0.5
 created: <ISO 8601 date>
 last_confirmed: <ISO 8601 date>
 supersedes: []
 superseded_by: null
-relations: [{type, target_id|target, confidence?}, ...]   # resolved at compile
+relations: [...]    # resolved at compile
 ```
-
-Idempotent rebuild: pages already promoted (matched via ``sources`` containing
-the raw_id) are updated in place with a refreshed ``last_confirmed``. New
-relations are merged; existing typed relations are preserved.
 """
 
 from __future__ import annotations
 
+import json
+import sys
 from dataclasses import dataclass
 from datetime import date
 from pathlib import Path
@@ -32,8 +46,10 @@ from lyra import markdown as md
 from lyra.ids import new_ulid
 from lyra.relations import WIKILINK_RE, RawRelation, parse_document
 from lyra.index.graph_projection import GraphProjectionConfig, open_db, upsert_from_vault
+from lyra.extract.heuristic import ENTITY_TYPES, ExtractedEntity, extract as heuristic_extract
 
 WIKI_SOURCES_DIR = "wiki/sources"
+WIKI_ENTITIES_DIR = "wiki/entities"
 PROMOTABLE_KINDS = {"research", "clip"}
 
 
@@ -43,27 +59,45 @@ class CompileReport:
     updated: list[Path]
     skipped: list[Path]
     errors: list[tuple[Path, str]]
+    entities_upserted: int = 0
 
 
-def compile_vault(vault_path: Path) -> CompileReport:
+# ---------------------------------------------------------------------------
+# Public API
+# ---------------------------------------------------------------------------
+
+def compile_vault(
+    vault_path: Path,
+    *,
+    extraction_provider: str = "",
+    extraction_model: str = "",
+    extraction_endpoint: str = "",
+    extraction_extra: dict | None = None,
+) -> CompileReport:
+    """Batch compile: all pending raw pages.  Entity extraction runs per page."""
     report = CompileReport(promoted=[], updated=[], skipped=[], errors=[])
     raw_root = vault_path / "raw"
     if not raw_root.exists():
         report.errors.append((raw_root, "raw/ does not exist"))
         return report
 
-    # Pass 1: promote raws into wiki pages. Cross-page relations may stay
-    # unresolved (target: "[[Title]]") if the target page is created later in
-    # this same run; pass 2 cleans that up.
     title_to_page = _build_title_index(vault_path)
     for raw_path in sorted(raw_root.glob("*.md")):
         try:
-            _promote_one(raw_path, vault_path, title_to_page, report)
-        except Exception as exc:  # noqa: BLE001 — log and continue
+            src_id = _promote_one(raw_path, vault_path, title_to_page, report)
+            if src_id:
+                _extract_and_upsert_entities(
+                    raw_path, src_id, vault_path,
+                    entities_json=None,
+                    provider=extraction_provider,
+                    model=extraction_model,
+                    endpoint=extraction_endpoint,
+                    extra=extraction_extra,
+                    report=report,
+                )
+        except Exception as exc:  # noqa: BLE001
             report.errors.append((raw_path, str(exc)))
 
-    # Pass 2: rebuild title index now that all pages exist, then sweep wiki
-    # pages and replace any unresolved `target: "[[Title]]"` with `target_id`.
     title_to_page = _build_title_index(vault_path)
     _resolve_pending_relations(vault_path, title_to_page)
 
@@ -72,6 +106,245 @@ def compile_vault(vault_path: Path) -> CompileReport:
     _upsert_graph(vault_path)
     return report
 
+
+def compile_page(
+    raw_id: str,
+    vault_path: Path,
+    *,
+    entities_json: str | None = None,
+    extraction_provider: str = "",
+    extraction_model: str = "",
+    extraction_endpoint: str = "",
+    extraction_extra: dict | None = None,
+) -> CompileReport:
+    """Imperative single-page compile (M3.4 — used by the Lyra skill).
+
+    ``entities_json`` present → skip any LLM call; parse and apply entities
+    deterministically (idempotent).
+
+    ``entities_json`` absent → apply heuristic extraction plus LiteLLM if
+    configured (same logic as batch).
+
+    Raises ``ValueError`` on malformed JSON or unknown entity_type.
+    """
+    report = CompileReport(promoted=[], updated=[], skipped=[], errors=[])
+
+    raw_root = vault_path / "raw"
+    raw_path: Path | None = None
+    for candidate in raw_root.glob("*.md"):
+        doc = md.read(candidate)
+        if doc.frontmatter.get("raw_id") == raw_id:
+            raw_path = candidate
+            break
+
+    if raw_path is None:
+        report.errors.append((raw_root / raw_id, f"raw record {raw_id!r} not found"))
+        return report
+
+    # Validate entities_json eagerly so the caller gets a clear error
+    if entities_json is not None:
+        _validate_entities_json(entities_json)
+
+    title_to_page = _build_title_index(vault_path)
+    try:
+        src_id = _promote_one(raw_path, vault_path, title_to_page, report)
+        if src_id:
+            _extract_and_upsert_entities(
+                raw_path, src_id, vault_path,
+                entities_json=entities_json,
+                provider=extraction_provider,
+                model=extraction_model,
+                endpoint=extraction_endpoint,
+                extra=extraction_extra,
+                report=report,
+            )
+    except Exception as exc:  # noqa: BLE001
+        report.errors.append((raw_path, str(exc)))
+
+    title_to_page = _build_title_index(vault_path)
+    _resolve_pending_relations(vault_path, title_to_page)
+    _regen_index(vault_path)
+    _append_log(vault_path, report)
+    _upsert_graph(vault_path)
+    return report
+
+
+# ---------------------------------------------------------------------------
+# Entity extraction + upsert (M3.3)
+# ---------------------------------------------------------------------------
+
+def _validate_entities_json(entities_json: str) -> list[dict]:
+    """Parse and validate entities JSON.  Raises ValueError on bad input."""
+    try:
+        parsed = json.loads(entities_json)
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"malformed entities JSON: {exc}") from exc
+
+    if not isinstance(parsed, list):
+        raise ValueError(f"entities JSON must be a list, got {type(parsed).__name__}")
+
+    for i, item in enumerate(parsed):
+        if not isinstance(item, dict):
+            raise ValueError(f"entities[{i}] must be an object, got {type(item).__name__}")
+        et = str(item.get("entity_type") or item.get("type") or "")
+        nm = str(item.get("name") or "")
+        if not et:
+            raise ValueError(f"entities[{i}] missing 'entity_type'")
+        if et not in ENTITY_TYPES:
+            raise ValueError(
+                f"entities[{i}] unknown entity_type {et!r}; valid: {sorted(ENTITY_TYPES)}"
+            )
+        if not nm:
+            raise ValueError(f"entities[{i}] missing 'name'")
+
+    return parsed
+
+
+def _json_to_extracted(parsed: list[dict]) -> list[ExtractedEntity]:
+    out: list[ExtractedEntity] = []
+    for item in parsed:
+        et = str(item.get("entity_type") or item.get("type") or "").lower().strip()
+        nm = str(item.get("name") or "").strip()
+        aliases = [str(a) for a in (item.get("aliases") or []) if isinstance(a, str)]
+        attrs = dict(item.get("attributes") or {})
+        out.append(ExtractedEntity(entity_type=et, name=nm, aliases=aliases, attributes=attrs, confidence=0.9))
+    return out
+
+
+def _extract_and_upsert_entities(
+    raw_path: Path,
+    src_id: str,
+    vault_path: Path,
+    *,
+    entities_json: str | None,
+    provider: str,
+    model: str,
+    endpoint: str,
+    extra: dict | None,
+    report: CompileReport,
+) -> None:
+    raw_doc = md.read(raw_path)
+
+    if entities_json is not None:
+        # Imperative path: entities pre-extracted, apply deterministically
+        parsed = _validate_entities_json(entities_json)
+        entities = _json_to_extracted(parsed)
+    else:
+        # Heuristic baseline always runs
+        entities = heuristic_extract(raw_doc.body, raw_doc.frontmatter)
+
+        # LiteLLM path: only if provider is configured
+        if provider:
+            try:
+                from lyra.extract.llm import extract_with_llm  # noqa: PLC0415
+                llm_entities = extract_with_llm(
+                    raw_doc.body,
+                    raw_doc.frontmatter,
+                    provider=provider,
+                    model=model,
+                    endpoint=endpoint,
+                    extra=extra or {},
+                )
+                entities = _merge_entities(entities, llm_entities)
+            except Exception as exc:  # noqa: BLE001
+                print(f"lyra warning: LLM extraction error ({exc}); using heuristic only", file=sys.stderr)
+
+    for entity in entities:
+        try:
+            _upsert_entity_page(entity, src_id, vault_path)
+            report.entities_upserted += 1
+        except Exception as exc:  # noqa: BLE001
+            report.errors.append((raw_path, f"entity upsert failed for {entity.name!r}: {exc}"))
+
+
+def _merge_entities(
+    heuristic: list[ExtractedEntity],
+    llm: list[ExtractedEntity],
+) -> list[ExtractedEntity]:
+    """Merge lists, deduping on (entity_type, normalised name).  LLM wins on conflicts."""
+    index: dict[tuple[str, str], ExtractedEntity] = {}
+    for e in heuristic:
+        index[(e.entity_type, e.name.lower())] = e
+    for e in llm:
+        index[(e.entity_type, e.name.lower())] = e  # LLM overwrites
+    return list(index.values())
+
+
+def _upsert_entity_page(entity: ExtractedEntity, src_id: str, vault_path: Path) -> Path:
+    """Create or update an entity page.  Returns the page path."""
+    entities_dir = vault_path / WIKI_ENTITIES_DIR / entity.entity_type
+    entities_dir.mkdir(parents=True, exist_ok=True)
+
+    # Find existing entity page by (entity_type, name) — case-insensitive match on title
+    existing = _find_entity_page(entities_dir, entity.name)
+    today = date.today().isoformat()
+
+    if existing is not None:
+        doc = md.read(existing)
+        doc.frontmatter["last_confirmed"] = today
+
+        # Merge aliases
+        current_aliases = list(doc.frontmatter.get("aliases") or [])
+        for a in entity.aliases:
+            if a not in current_aliases:
+                current_aliases.append(a)
+        doc.frontmatter["aliases"] = current_aliases
+
+        # Merge attributes
+        attrs = dict(doc.frontmatter.get("attributes") or {})
+        attrs.update(entity.attributes)
+        doc.frontmatter["attributes"] = attrs
+
+        # Track which source pages mention this entity (deduplicated)
+        mentioned_by = list(doc.frontmatter.get("mentioned_by") or [])
+        if src_id not in mentioned_by:
+            mentioned_by.append(src_id)
+        doc.frontmatter["mentioned_by"] = mentioned_by
+
+        md.write(existing, doc)
+        return existing
+
+    # Create new entity page
+    page_id = new_ulid()
+    slug = md.slug(entity.name)
+    page_path = _disambiguate(entities_dir / f"{page_id}-{slug}.md")
+
+    frontmatter: dict = {
+        "id": page_id,
+        "title": entity.name,
+        "type": "entity",
+        "entity_type": entity.entity_type,
+        "aliases": entity.aliases,
+        "attributes": entity.attributes,
+        "created": today,
+        "last_confirmed": today,
+        "mentioned_by": [src_id],
+        "supersedes": [],
+        "superseded_by": None,
+        "relations": [],
+    }
+    body = f"# {entity.name}\n\nEntity type: `{entity.entity_type}`\n"
+    md.write(page_path, md.Document(frontmatter=frontmatter, body=body))
+    return page_path
+
+
+def _find_entity_page(entities_dir: Path, name: str) -> Path | None:
+    """Find an existing entity page by normalised title match."""
+    norm = name.strip().lower()
+    for path in entities_dir.glob("*.md"):
+        doc = md.read(path)
+        title = str(doc.frontmatter.get("title") or "")
+        aliases = doc.frontmatter.get("aliases") or []
+        if title.lower() == norm:
+            return path
+        if any(str(a).lower() == norm for a in aliases):
+            return path
+    return None
+
+
+# ---------------------------------------------------------------------------
+# Source page promotion (M1.4 — unchanged logic, now returns src_id)
+# ---------------------------------------------------------------------------
 
 def _resolve_pending_relations(vault_path: Path, title_to_page: dict[str, dict]) -> None:
     wiki_root = vault_path / "wiki"
@@ -122,21 +395,22 @@ def _promote_one(
     vault_path: Path,
     title_to_page: dict[str, dict],
     report: CompileReport,
-) -> None:
+) -> str | None:
+    """Promote a single raw page.  Returns the wiki-page ULID if promoted/updated, else None."""
     raw_doc = md.read(raw_path)
     raw_id = raw_doc.frontmatter.get("raw_id")
     kind = raw_doc.frontmatter.get("kind")
     if not raw_id or kind not in PROMOTABLE_KINDS:
         report.skipped.append(raw_path)
-        return
+        return None
 
     title = raw_doc.frontmatter.get("title") or raw_path.stem
     raw_relations = parse_document(raw_doc.frontmatter, raw_doc.body)
 
     existing = _find_existing(vault_path, raw_id)
     if existing is not None:
-        _update_existing(existing, raw_id, raw_relations, title_to_page, report)
-        return
+        src_id = _update_existing(existing, raw_id, raw_relations, title_to_page, report)
+        return src_id
 
     page_id = new_ulid()
     page_slug = md.slug(title)
@@ -160,6 +434,7 @@ def _promote_one(
     body = _render_body(title, raw_doc, vault_path)
     md.write(page_path, md.Document(frontmatter=frontmatter, body=body))
     report.promoted.append(page_path)
+    return page_id
 
 
 def _update_existing(
@@ -168,7 +443,7 @@ def _update_existing(
     raw_relations: list[RawRelation],
     title_to_page: dict[str, dict],
     report: CompileReport,
-) -> None:
+) -> str:
     doc = md.read(page_path)
     today = date.today().isoformat()
     doc.frontmatter["last_confirmed"] = today
@@ -183,6 +458,7 @@ def _update_existing(
 
     md.write(page_path, doc)
     report.updated.append(page_path)
+    return str(doc.frontmatter.get("id") or "")
 
 
 def _resolve_relations(
@@ -317,7 +593,7 @@ def _append_log(vault_path: Path, report: CompileReport) -> None:
     line = (
         f"- {today} — promoted={len(report.promoted)} "
         f"updated={len(report.updated)} skipped={len(report.skipped)} "
-        f"errors={len(report.errors)}"
+        f"errors={len(report.errors)} entities={report.entities_upserted}"
     )
     existing = log_path.read_text(encoding="utf-8") if log_path.exists() else ""
     log_path.write_text(existing + line + "\n", encoding="utf-8")

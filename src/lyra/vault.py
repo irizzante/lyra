@@ -6,6 +6,10 @@ from importlib import resources
 from pathlib import Path
 
 RAW_SUBDIRS = ("assets",)
+
+# M3.1 — entity types with first-class wiki directories
+ENTITY_TYPES = ("concept", "decision", "file", "library", "person", "project")
+
 WIKI_SUBDIRS = (
     "sessions",
     "concepts",
@@ -15,6 +19,7 @@ WIKI_SUBDIRS = (
     "synthesis",
     "qa",
     "meta",
+    *(f"entities/{et}" for et in ENTITY_TYPES),
 )
 WIKI_ROOT_FILES = ("AGENTS.md", "index.md", "log.md")
 

@@ -23,6 +23,7 @@ class SourceConfig:
     type: str
     enabled: bool = True
     options: dict[str, Any] = field(default_factory=dict)
+    adapter: str = ""  # dotted class path e.g. lyra.sources.plain_markdown.PlainMarkdownSource
 
 
 @dataclass

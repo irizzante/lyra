@@ -41,29 +41,132 @@ def _cmd_status(args: argparse.Namespace) -> int:
         print(str(exc), file=sys.stderr)
         return 1
 
-    from lyra.sources.obsidian_tasks import ObsidianTasksSource
-
-    wiki_src = KarpathyWikiSource(config.vault_path)
-    wiki_health = wiki_src.health()
-    tasks_src = ObsidianTasksSource(config.vault_path)
-    tasks_health = tasks_src.health()
+    from lyra.sources import load_all_sources
 
     print(f"lyra: {__version__}")
     print(f"config: {cfg_mod.CONFIG_PATH}")
     print(f"vault: {config.vault_path}")
     print("sources:")
-    print(f"  karpathy_wiki  health={'ok' if wiki_health.ok else 'error'}")
-    if not wiki_health.ok:
-        print(f"    ! {wiki_health.message}", file=sys.stderr)
-    tasks_marker = "ok" if tasks_health.ok else "unavailable"
-    tasks_count = tasks_health.detail.get("task_count", "?") if tasks_health.ok else "-"
-    print(f"  obsidian_tasks health={tasks_marker}  tasks={tasks_count}")
+
+    sources = load_all_sources(config)
+    all_ok = True
+    for name, src in sources:
+        h = src.health()
+        marker = "ok" if h.ok else "error"
+        detail = ""
+        if h.ok and h.detail:
+            kv = next(iter(h.detail.items()), None)
+            if kv:
+                detail = f"  {kv[0]}={kv[1]}"
+        print(f"  {name:<20} health={marker}{detail}")
+        if not h.ok:
+            print(f"    ! {h.message}", file=sys.stderr)
+            all_ok = False
 
     raw_count = len(list((config.vault_path / "raw").glob("*.md"))) if (config.vault_path / "raw").exists() else 0
-    wiki_count = len(list((config.vault_path / "wiki" / "sources").glob("*.md"))) if (config.vault_path / "wiki" / "sources").exists() else 0
+    wiki_count = sum(1 for _ in (config.vault_path / "wiki").rglob("*.md")) if (config.vault_path / "wiki").exists() else 0
     print(f"raw records: {raw_count}  wiki pages: {wiki_count}")
 
-    return 0 if wiki_health.ok else 1
+    return 0 if all_ok else 1
+
+
+def _cmd_source_list(args: argparse.Namespace) -> int:
+    try:
+        config = cfg_mod.load(cfg_mod.CONFIG_PATH)
+    except FileNotFoundError as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
+
+    from lyra.sources import load_source
+
+    if not config.sources:
+        print("no sources configured")
+        return 0
+
+    for src_cfg in config.sources:
+        enabled = "enabled" if src_cfg.enabled else "disabled"
+        adapter = src_cfg.adapter or src_cfg.type
+        try:
+            src = load_source(src_cfg, vault_path=config.vault_path)
+            h = src.health()
+            health_str = "ok" if h.ok else f"error: {h.message}"
+        except Exception as exc:
+            health_str = f"load-error: {exc}"
+        print(f"  {src_cfg.name:<20} [{enabled}]  adapter={adapter}  health={health_str}")
+    return 0
+
+
+def _cmd_source_add(args: argparse.Namespace) -> int:
+    try:
+        config = cfg_mod.load(cfg_mod.CONFIG_PATH)
+    except FileNotFoundError as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
+
+    if any(s.name == args.name for s in config.sources):
+        print(f"source {args.name!r} already exists. Remove it first.", file=sys.stderr)
+        return 1
+
+    options: dict = {}
+    for kv in (args.config or []):
+        if "=" not in kv:
+            print(f"invalid --config entry {kv!r}: expected key=value", file=sys.stderr)
+            return 1
+        k, _, v = kv.partition("=")
+        options[k.strip()] = v.strip()
+
+    src_cfg = cfg_mod.SourceConfig(
+        name=args.name,
+        type=args.name,
+        adapter=args.adapter,
+        options=options,
+        enabled=True,
+    )
+    config.sources.append(src_cfg)
+    cfg_mod.save(config, cfg_mod.CONFIG_PATH)
+    print(f"added source {args.name!r}  adapter={args.adapter}")
+    return 0
+
+
+def _cmd_source_remove(args: argparse.Namespace) -> int:
+    try:
+        config = cfg_mod.load(cfg_mod.CONFIG_PATH)
+    except FileNotFoundError as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
+
+    before = len(config.sources)
+    config.sources = [s for s in config.sources if s.name != args.name]
+    if len(config.sources) == before:
+        print(f"source {args.name!r} not found", file=sys.stderr)
+        return 1
+    cfg_mod.save(config, cfg_mod.CONFIG_PATH)
+    print(f"removed source {args.name!r}")
+    return 0
+
+
+def _cmd_source_refresh(args: argparse.Namespace) -> int:
+    try:
+        config = cfg_mod.load(cfg_mod.CONFIG_PATH)
+    except FileNotFoundError as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
+
+    from lyra.sources import load_source
+
+    targets = [s for s in config.sources if not args.name or s.name == args.name]
+    if not targets:
+        print(f"source {args.name!r} not found", file=sys.stderr)
+        return 1
+
+    for src_cfg in targets:
+        try:
+            src = load_source(src_cfg, vault_path=config.vault_path)
+            h = src.health()
+            print(f"  {src_cfg.name}: health={'ok' if h.ok else 'error'}")
+        except Exception as exc:
+            print(f"  {src_cfg.name}: error — {exc}", file=sys.stderr)
+    return 0
 
 
 def _cmd_ingest(args: argparse.Namespace) -> int:
@@ -367,11 +470,24 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     p_lint.set_defaults(func=_cmd_lint)
 
-    for name, milestone in [
-        ("source", "M2"),
-    ]:
-        p = sub.add_parser(name, help=f"(stub — planned for {milestone})")
-        p.set_defaults(func=_stub(name, milestone))
+    p_source = sub.add_parser("source", help="manage pluggable read-only sources (M2)")
+    source_sub = p_source.add_subparsers(dest="source_action", required=True)
+
+    source_sub.add_parser("list", help="list configured sources with health").set_defaults(func=_cmd_source_list)
+
+    p_add = source_sub.add_parser("add", help="register a new source")
+    p_add.add_argument("name", help="unique source name")
+    p_add.add_argument("--adapter", required=True, metavar="DOTTED.CLASS", help="dotted class path for the adapter")
+    p_add.add_argument("--config", action="append", metavar="KEY=VAL", help="adapter config (repeatable)")
+    p_add.set_defaults(func=_cmd_source_add)
+
+    p_rm = source_sub.add_parser("remove", help="unregister a source")
+    p_rm.add_argument("name", help="source name to remove")
+    p_rm.set_defaults(func=_cmd_source_remove)
+
+    p_refresh = source_sub.add_parser("refresh", help="check/refresh a source's health")
+    p_refresh.add_argument("name", nargs="?", default=None, help="source name (default: all)")
+    p_refresh.set_defaults(func=_cmd_source_refresh)
 
     return parser
 

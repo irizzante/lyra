@@ -46,6 +46,46 @@ class QueryHit:
     via_graph: bool = False
 
 
+def fanout_query(
+    query: str,
+    sources: list,  # list[tuple[str, Source]]
+    *,
+    k: int = 10,
+) -> list[QueryHit]:
+    """Fan-out query across external Source adapters, merge results.
+
+    Each source's ``query()`` result is normalised to QueryHit and merged
+    by id (deduplication). Sources that raise are skipped with a warning.
+    """
+    import warnings
+    from lyra.sources.base import Result
+
+    merged: dict[str, QueryHit] = {}
+
+    for name, src in sources:
+        try:
+            results: list[Result] = src.query(query, k=k)
+        except Exception as exc:  # noqa: BLE001
+            warnings.warn(f"Source {name!r} failed during query: {exc}", stacklevel=2)
+            continue
+        for i, r in enumerate(results):
+            hit_id = r.id or f"{name}:{i}"
+            if hit_id in merged:
+                continue
+            merged[hit_id] = QueryHit(
+                id=hit_id,
+                source=r.source or name,
+                title=r.title,
+                snippet=r.snippet,
+                score=r.score,
+                file_path="",
+                last_seen=r.last_seen.isoformat() if r.last_seen else "",
+                citations=r.citations,
+            )
+
+    return sorted(merged.values(), key=lambda h: h.score, reverse=True)[:k]
+
+
 def hybrid_query(
     query: str,
     vault_path: Path,
@@ -53,6 +93,7 @@ def hybrid_query(
     k: int = 10,
     graph_config: GraphProjectionConfig | None = None,
     use_vector: bool = True,
+    extra_sources: list | None = None,
 ) -> list[QueryHit]:
     """Run hybrid BM25/vector/graph query over the wiki.
 
@@ -69,6 +110,14 @@ def hybrid_query(
             pass  # vector index absent — BM25 only
 
     merged = _merge_hits(bm25_hits, vector_hits, vault_path=vault_path)
+
+    # Fan-out to extra sources (M2) and merge
+    if extra_sources:
+        extra_hits = fanout_query(query, extra_sources, k=k)
+        by_path = {h.file_path: h for h in merged}
+        for h in extra_hits:
+            if h.id not in {m.id for m in merged}:
+                merged.append(h)
 
     if not merged:
         return []

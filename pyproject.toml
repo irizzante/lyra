@@ -1,0 +1,57 @@
+[project]
+name = "lyra-memory"
+version = "0.1.0"
+description = "Lyra — local-first, vendor-agnostic memory orchestrator for AI coding agents."
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "Apache-2.0" }
+authors = [{ name = "irizzante", email = "ivan.rizzante@eng.it" }]
+keywords = ["memory", "agent", "obsidian", "wiki", "rag", "fts5", "bm25", "knowledge-graph"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: Apache Software License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Software Development :: Libraries",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
+
+[project.urls]
+Homepage = "https://github.com/irizzante/lyra-memory"
+"Bug Tracker" = "https://github.com/irizzante/lyra-memory/issues"
+Changelog = "https://github.com/irizzante/lyra-memory/blob/main/CHANGELOG.md"
+
+dependencies = [
+    "pyyaml>=6.0.1",
+    "python-ulid>=2.7.0",
+    "typing-extensions>=4.10.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0.0",
+    "ruff>=0.6.0",
+]
+
+[project.scripts]
+lyra = "lyra.cli:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/lyra"]
+
+[tool.hatch.build.targets.wheel.shared-data]
+"src/lyra/templates" = "lyra/templates"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"

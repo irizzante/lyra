@@ -7,6 +7,7 @@ from pathlib import Path
 
 RAW_SUBDIRS = ("assets",)
 WIKI_SUBDIRS = (
+    "sessions",
     "concepts",
     "connections",
     "sources",

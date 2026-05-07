@@ -120,6 +120,16 @@ def neighbours(
     return list(cur.fetchall())
 
 
+def count_inbound_supports(conn: sqlite3.Connection, page_id: str) -> int:
+    """Count inbound 'supports' edges for page_id in the graph projection."""
+    cur = conn.execute(
+        "SELECT COUNT(*) FROM edges WHERE dst_id = ? AND type = 'supports'",
+        (page_id,),
+    )
+    row = cur.fetchone()
+    return row[0] if row else 0
+
+
 def upsert_from_vault(vault_path: Path, conn: sqlite3.Connection) -> tuple[int, int]:
     """Populate pages and edges tables from compiled wiki frontmatter.
 

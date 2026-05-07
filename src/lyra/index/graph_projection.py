@@ -120,6 +120,74 @@ def neighbours(
     return list(cur.fetchall())
 
 
+_BFS_EXCLUDED_DEFAULT: tuple[str, ...] = ("contradicts", "superseded_by")
+
+
+def traverse(
+    conn: sqlite3.Connection,
+    start_ids: list[str],
+    max_hops: int = 2,
+    edge_types: tuple[str, ...] | None = None,
+    max_results: int = 200,
+) -> list[tuple[str, int]]:
+    """BFS multi-hop traversal via SQLite recursive CTE.
+
+    Returns ``(page_id, min_hops)`` pairs for all nodes reachable within
+    ``max_hops`` from any node in ``start_ids``.
+
+    When ``edge_types`` is given it acts as a whitelist (only traverse those
+    types).  When ``None`` the default exclusion list applies:
+    ``contradicts`` and ``superseded_by`` are never traversed because they
+    describe history rather than navigational relationships.
+
+    Results are capped at ``max_results`` to prevent explosion on dense
+    graphs.  ``max_hops`` is silently clamped to [1, 4].
+    """
+    if not start_ids:
+        return []
+    max_hops = min(max(max_hops, 1), 4)
+
+    if edge_types is not None:
+        type_clause = "AND e.type IN ({})".format(",".join("?" * len(edge_types)))
+        type_params: list[str] = list(edge_types)
+    else:
+        type_clause = "AND e.type NOT IN ({})".format(
+            ",".join("?" * len(_BFS_EXCLUDED_DEFAULT))
+        )
+        type_params = list(_BFS_EXCLUDED_DEFAULT)
+
+    base = " UNION ALL ".join(
+        "SELECT ? AS node_id, 0 AS hops" for _ in start_ids
+    )
+
+    sql = f"""
+    WITH RECURSIVE bfs(node_id, hops) AS (
+        {base}
+        UNION
+        SELECT e.dst_id, bfs.hops + 1
+        FROM edges e JOIN bfs ON e.src_id = bfs.node_id
+        WHERE bfs.hops < ? {type_clause}
+        UNION
+        SELECT e.src_id, bfs.hops + 1
+        FROM edges e JOIN bfs ON e.dst_id = bfs.node_id
+        WHERE bfs.hops < ? {type_clause}
+    )
+    SELECT node_id, MIN(hops) AS min_hops
+    FROM bfs
+    GROUP BY node_id
+    LIMIT ?
+    """
+
+    params: list[object] = list(start_ids)
+    params.append(max_hops)
+    params.extend(type_params)
+    params.append(max_hops)
+    params.extend(type_params)
+    params.append(max_results)
+
+    return conn.execute(sql, params).fetchall()
+
+
 def upsert_from_vault(vault_path: Path, conn: sqlite3.Connection) -> tuple[int, int]:
     """Populate pages and edges tables from compiled wiki frontmatter.
 

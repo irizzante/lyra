@@ -1,7 +1,7 @@
 ---
 status: draft
 approved_at:
-last_modified: 2026-05-06T16:30:00Z
+last_modified: 2026-05-07T00:00:00Z
 source_design_approved_at:
 ---
 
@@ -44,7 +44,7 @@ V1 ships as the M1 fat vertical defined in design.md. Each top-level item below 
     - Design: `Components > Lyra Skill`, `Components > OpenCode Hook Adapter`
     - Verification:
       - command: ["node", "--check", "hooks/claude-code/session-start.mjs"]
-  - [⏳] 3.3 Pre-existing vault smoke test: initialise Lyra over a vault that already contains user-authored markdown + `Tasks/` notes; assert no overwrites and that user pages stay queryable (`R1.AC6`, `R1.AC7`)
+  - [✅] 3.3 Pre-existing vault smoke test: initialise Lyra over a vault that already contains user-authored markdown + `Tasks/` notes; assert no overwrites and that user pages stay queryable (`R1.AC6`, `R1.AC7`)
     - Requirements: `R1.AC6`, `R1.AC7`
     - Verification:
       - command: ["uv", "run", "pytest", "-q", "tests/test_pre_existing_vault.py"]
@@ -56,7 +56,7 @@ V1 ships as the M1 fat vertical defined in design.md. Each top-level item below 
     - Verification:
       - command: ["uv", "run", "pytest", "-q", "tests/test_compile.py"]
     - Refactor pending: current code walks `raw/research/` + `raw/clips/`. Move to flat raw walk + dispatch by kind. Add session-kind path to `wiki/sessions/`.
-  - [⏳] 4.2 Author the canonical `wiki/AGENTS.md` schema template (per `R14.AC2`): entity types, typed relationships, ingestion rules per kind, when-to-create-vs-update, quality standards, contradiction-handling, consolidation schedule, scope conventions, Q&A filing conventions
+  - [✅] 4.2 Author the canonical `wiki/AGENTS.md` schema template (per `R14.AC2`): entity types, typed relationships, ingestion rules per kind, when-to-create-vs-update, quality standards, contradiction-handling, consolidation schedule, scope conventions, Q&A filing conventions
     - Requirements: `R14.AC2`, `R14.AC3`
     - Design: `Components > Schema Document`
     - Verification:
@@ -88,62 +88,61 @@ V1 ships as the M1 fat vertical defined in design.md. Each top-level item below 
     - Verification:
       - command: ["uv", "run", "pytest", "-q", "tests/test_query.py"]
 
-- [🔧] 8. M1.8 — `lyra brief` SessionStart preamble
-  - [🔧] 8.1 Generate a token-budgeted SessionStart preamble (default-ON, ≤4 KB, items as IDs + ≤400ch top-3 / ≤120ch tail per ADR-5): active tasks (from `ObsidianTasksSource`, M1.11), recent episodic sessions, top semantic pages, recent compile log, Lyra usage hint
+- [✅] 8. M1.8 — `lyra brief` SessionStart preamble
+  - [✅] 8.1 Generate a token-budgeted SessionStart preamble (default-ON, ≤4 KB, items as IDs + ≤400ch top-3 / ≤120ch tail per ADR-5): active tasks (from `ObsidianTasksSource`, M1.11), recent episodic sessions, top semantic pages, recent compile log, Lyra usage hint
     - Requirements: `R4.AC1`–`R4.AC8`, `NFR3`
     - Design: `Architecture > Derived retrieval layer`, ADR-5
     - Verification:
       - command: ["uv", "run", "pytest", "-q", "tests/test_brief.py"]
-    - Refactor pending: current `brief.py` enforces total budget but lacks per-section tiered cap (top-3 with 400ch summaries vs tail 120ch). Add active-tasks section once `ObsidianTasksSource` (M1.11) lands.
 
-- [⏳] 9. M1.9 — Feedback loop delivery
-  - [⏳] 9.1 Author the canonical `wiki/AGENTS.md` schema document template per `R14`: entity types, typed relationships, ingestion rules per `kind`, when-to-create-vs-update, quality standards, contradiction-handling policy, consolidation schedule, scope conventions, Q&A filing conventions; deploy on `lyra init` only when absent
+- [✅] 9. M1.9 — Feedback loop delivery
+  - [✅] 9.1 Author the canonical `wiki/AGENTS.md` schema document template per `R14`: entity types, typed relationships, ingestion rules per `kind`, when-to-create-vs-update, quality standards, contradiction-handling policy, consolidation schedule, scope conventions, Q&A filing conventions; deploy on `lyra init` only when absent
     - Requirements: `R2A.AC1`–`R2A.AC3`, `R4.AC1`, `R4.AC2`, `R14.AC1`–`R14.AC4`, `NFR6`
     - Design: `Components > Schema Document`
     - Verification:
       - command: ["uv", "run", "pytest", "-q", "tests/test_agents_template.py"]
-  - [⏳] 9.2 Wire the Claude Code `SessionStart` hook to call `lyra brief` and prepend its output to the session by default (`R4.AC7`); already implemented in `hooks/claude-code/session-start.mjs` (M1.3.2)
+  - [✅] 9.2 Wire the Claude Code `SessionStart` hook to call `lyra brief` and prepend its output to the session by default (`R4.AC7`); already implemented in `hooks/claude-code/session-start.mjs` (M1.3.2)
     - Requirements: `R4.AC1`, `R4.AC7`, `R8.AC1`, `R8.AC2`
     - Design: `Components > Lyra Skill`, ADR-5
     - Verification:
       - command: ["node", "--check", "hooks/claude-code/session-start.mjs"]
-  - [⏳] 9.3 Implement unified `lyra install [--hook] [--skill] [--scope=user|project] [--no-inject]` that copies `hooks/claude-code/session-start.mjs` and `skills/lyra/SKILL.md` into the chosen target (Claude Code: `~/.claude/` or `.claude/`; OpenCode: equivalent)
+  - [✅] 9.3 Implement unified `lyra install [--hook] [--skill] [--scope=user|project] [--no-inject]` that copies `hooks/claude-code/session-start.mjs` and `skills/lyra/SKILL.md` into the chosen target (Claude Code: `~/.claude/` or `.claude/`; OpenCode: equivalent)
     - Requirements: `R4.AC7`, `R8.AC1`, `R12.AC1`–`R12.AC4`, `NFR5`, `NFR7`
     - Design: `Components > Lyra Skill`
     - Verification:
       - command: ["uv", "run", "pytest", "-q", "tests/test_install.py"]
-  - [⏳] 9.4 Author the single Lyra skill at `skills/lyra/SKILL.md` (progressive discovery): concise frontmatter trigger + body that progressively documents `lyra query/ingest/brief/status/recent/file`
+  - [✅] 9.4 Author the single Lyra skill at `skills/lyra/SKILL.md` (progressive discovery): concise frontmatter trigger + body that progressively documents `lyra query/ingest/brief/status/recent/file`
     - Requirements: `R12.AC1`–`R12.AC4`
     - Design: `Components > Lyra Skill`, ADR-3
     - Verification:
       - command: ["uv", "run", "pytest", "-q", "tests/test_skill_template.py"]
 
-- [⏳] 10. M1.10 — `lyra status` and `lyra lint`
-  - [⏳] 10.1 Implement `lyra status` reporting vault layout, index health, graph health, per-source health (both `KarpathyWikiSource` and `ObsidianTasksSource`)
+- [✅] 10. M1.10 — `lyra status` and `lyra lint`
+  - [✅] 10.1 Implement `lyra status` reporting vault layout, index health, graph health, per-source health (both `KarpathyWikiSource` and `ObsidianTasksSource`)
     - Requirements: `R5.AC1`, `R10.AC6`, `R13.AC1`–`R13.AC4`
     - Design: `Components And Interfaces > Lyra Public Interface`
     - Verification:
       - command: ["uv", "run", "lyra", "status"]
-  - [⏳] 10.2 Implement `lyra lint` reporting orphans, broken supersessions, dangling typed relations, contradictions without explicit supersession (per ADR-8), pages missing required frontmatter (`R15.AC4`)
+  - [✅] 10.2 Implement `lyra lint` reporting orphans, broken supersessions, dangling typed relations, contradictions without explicit supersession (per ADR-8), pages missing required frontmatter (`R15.AC4`)
     - Requirements: `R9.AC2`, `R9.AC3`, `R9.AC4`, `R15.AC4`
     - Design: `Components And Interfaces > Derived Retrieval Layer`, ADR-8
     - Verification:
       - command: ["uv", "run", "lyra", "lint", "--structural-only"]
 
-- [⏳] 11. M1.11 — Obsidian Tasks Source plugin
-  - [⏳] 11.1 Define the `Source` protocol with `query`, `list_recent`, `health`, `capabilities` and ship `KarpathyWikiSource` as the built-in canonical source implementing it
+- [✅] 11. M1.11 — Obsidian Tasks Source plugin
+  - [✅] 11.1 Define the `Source` protocol with `query`, `list_recent`, `health`, `capabilities` and ship `KarpathyWikiSource` as the built-in canonical source implementing it
     - Requirements: `R10.AC1`–`R10.AC6`
     - Design: `Components And Interfaces > Source Plugin Contract`
     - Verification:
       - command: ["uv", "run", "pytest", "-q", "tests/test_source_contract.py"]
-  - [⏳] 11.2 Implement `ObsidianTasksSource` over `<vault>/Tasks/*.md` (read-only): separate qmd collection `lyra-tasks`, normalised hits with `source: "obsidian-tasks"`, integration into `lyra query` fan-out and `lyra brief` active-tasks section
+  - [✅] 11.2 Implement `ObsidianTasksSource` over `<vault>/Tasks/*.md` (read-only): separate qmd collection `lyra-tasks`, normalised hits with `source: "obsidian-tasks"`, integration into `lyra query` fan-out and `lyra brief` active-tasks section
     - Requirements: `R10.AC1`–`R10.AC6`, `R13.AC1`–`R13.AC4`
     - Design: `Components > Obsidian Tasks Source`, ADR-4
     - Verification:
       - command: ["uv", "run", "pytest", "-q", "tests/test_obsidian_tasks_source.py"]
 
-- [⏳] 12. M1.12 — `lyra file` Q&A filing workflow
-  - [⏳] 12.1 Implement `lyra file --question "<q>" --answer "<a>" --sources <id1,id2>` to create a `wiki/qa/<ulid>-<slug>.md` page with `type: qa`, `# Question` / `# Answer` / `## Sources` body sections, and `relations: [{type: answers, target_id: <source>}]`
+- [✅] 12. M1.12 — `lyra file` Q&A filing workflow
+  - [✅] 12.1 Implement `lyra file --question "<q>" --answer "<a>" --sources <id1,id2>` to create a `wiki/qa/<ulid>-<slug>.md` page with `type: qa`, `# Question` / `# Answer` / `## Sources` body sections, and `relations: [{type: answers, target_id: <source>}]`
     - Requirements: `R17.AC1`–`R17.AC4`
     - Design: `Components > Schema Document`
     - Verification:

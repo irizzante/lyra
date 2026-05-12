@@ -259,29 +259,29 @@ Goal: extract entities (people, projects, libraries, concepts, files, decisions)
     - Verification:
       - command: ["uv", "run", "pytest", "-q", "tests/test_litellm_provider.py"]
 
-- [⏳] 26. M3.6 — Multi-hop graph traversal (BFS via SQLite recursive CTE)
-  - [⏳] 26.1 Implement `traverse(start_ids, max_hops, edge_types)` in `graph_projection.py` using SQLite recursive CTE; default `max_hops=2` (configurable via `query.max_hops`, capped at 4); edge-type filter excludes `contradicts` and `superseded_by` from BFS expansion; result-size cap to prevent explosion on dense graphs
+- [✅] 26. M3.6 — Multi-hop graph traversal (BFS via SQLite recursive CTE)
+  - [✅] 26.1 Implement `traverse(start_ids, max_hops, edge_types)` in `graph_projection.py` using SQLite recursive CTE; default `max_hops=2` (configurable via `query.max_hops`, capped at 4); edge-type filter excludes `contradicts` and `superseded_by` from BFS expansion; result-size cap to prevent explosion on dense graphs
     - Requirements: `R11.AC1`–`R11.AC6`
     - Design: ADR-10
     - Verification:
       - command: ["uv", "run", "pytest", "-q", "tests/test_multi_hop_traversal.py"]
 
-- [⏳] 27. M3.7 — `lyra query` multi-hop integration with RRF fusion
-  - [⏳] 27.1 Add `--max-hops N` flag to `lyra query`; replace existing `_extend_with_graph` (one-hop) with `_traverse_graph(start_ids, max_hops, edge_types)`; implement RRF fusion (`k=60`) combining BM25 + vector + graph streams in `query.py`; surface multi-hop paths in citations (e.g. `Page A → mentions → Entity X → uses → Page B`)
+- [✅] 27. M3.7 — `lyra query` multi-hop integration with RRF fusion
+  - [✅] 27.1 Add `--max-hops N` flag to `lyra query`; replace existing `_extend_with_graph` (one-hop) with `_traverse_graph(start_ids, max_hops, edge_types)`; implement RRF fusion (`k=60`) combining BM25 + vector + graph streams in `query.py`; surface multi-hop paths in citations (e.g. `Page A → mentions → Entity X → uses → Page B`)
     - Requirements: `R5.AC1`–`R5.AC4`, `R11.AC1`–`R11.AC6`
     - Design: `Components > Derived Retrieval Layer`, ADR-10
     - Verification:
       - command: ["uv", "run", "pytest", "-q", "tests/test_query_multi_hop.py"]
 
-- [⏳] 28. M3.8 — Auto-supersession via weighted score on contradiction
-  - [⏳] 28.1 Implement `src/lyra/supersession.py`: compute weighted score `0.5·recency + 0.3·authority + 0.2·support` per page (weights configurable via `auto_supersession.weights`); when `A contradicts:: B` and `|score(A) − score(B)| ≥ threshold` (default `0.2`), set `winner.supersedes=[loser.id]` + `loser.superseded_by=winner.id`; preserve both pages; emit decision log with breakdown; opt-out via `auto_supersession.enabled: false`
+- [✅] 28. M3.8 — Auto-supersession via weighted score on contradiction
+  - [✅] 28.1 Implement `src/lyra/supersession.py`: compute weighted score `0.5·recency + 0.3·authority + 0.2·support` per page (weights configurable via `auto_supersession.weights`); when `A contradicts:: B` and `|score(A) − score(B)| ≥ threshold` (default `0.2`), set `winner.supersedes=[loser.id]` + `loser.superseded_by=winner.id`; preserve both pages; emit decision log with breakdown; opt-out via `auto_supersession.enabled: false`
     - Requirements: `R6.AC1`–`R6.AC8`, `R9.AC2`, `R11.AC4`
     - Design: ADR-8 (existing) + ADR-11 (new)
     - Verification:
       - command: ["uv", "run", "pytest", "-q", "tests/test_supersession.py"]
 
-- [⏳] 29. M3.9 — `lyra lint` updates for unresolved contradictions
-  - [⏳] 29.1 Update lint to surface contradictions where score gap was below threshold (`needs human resolution`); show score breakdown (recency / authority / support) per ambiguous case; existing `CONTRADICTION` lint kind extended with `score_gap`, `winner_score`, `loser_score` fields
+- [✅] 29. M3.9 — `lyra lint` updates for unresolved contradictions
+  - [✅] 29.1 Update lint to surface contradictions where score gap was below threshold (`needs human resolution`); show score breakdown (recency / authority / support) per ambiguous case; existing `CONTRADICTION` lint kind extended with `score_gap`, `winner_score`, `loser_score` fields
     - Requirements: `R9.AC2`, `R9.AC3`, `R9.AC4`, `R15.AC4`
     - Design: `Components > Derived Retrieval Layer`, ADR-11
     - Verification:

@@ -14,7 +14,6 @@ from lyra import __version__
 from lyra import config as cfg_mod
 from lyra.compile_pipeline import compile_page, compile_vault
 from lyra.ingest import ingest as do_ingest
-from lyra.sources.karpathy_wiki import KarpathyWikiSource
 from lyra.vault import ensure_layout
 
 NOT_IMPLEMENTED_EXIT = 64

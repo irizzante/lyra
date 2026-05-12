@@ -98,4 +98,5 @@ def test_source_refresh_named(vault_and_config, capsys) -> None:
 def test_status_uses_all_sources(vault_and_config, capsys) -> None:
     rc = main(["status"])
     out = capsys.readouterr().out
+    assert rc == 0
     assert "karpathy_wiki" in out

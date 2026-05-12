@@ -1,3 +1,6 @@
+# Walden session prompts (local only)
+.walden/prompts/
+
 # Python
 __pycache__/
 *.py[cod]

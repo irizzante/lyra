@@ -35,7 +35,6 @@ def vault(tmp_path: Path) -> Path:
 def test_source_is_runtime_checkable() -> None:
     """Source must be @runtime_checkable so isinstance() works."""
     from lyra.sources.base import Source
-    import typing
     assert hasattr(Source, "__protocol_attrs__") or hasattr(Source, "_is_protocol")
 
 

@@ -167,6 +167,6 @@ def test_builtin_adapters_importable() -> None:
             mod = importlib.import_module(module_path)
             cls = getattr(mod, class_name, None)
             assert cls is not None, f"{dotted} not found"
-        except ImportError as exc:
+        except ImportError:
             # plain_markdown, agentmemory, mcp_memory may not exist yet in this track
             pass

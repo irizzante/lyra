@@ -33,7 +33,6 @@ class PlainMarkdownSource(Source):
     ) -> list[Result]:
         """Search the markdown tree via qmd; returns [] if index absent."""
         import subprocess
-        import sys
 
         if not self.root.exists():
             return []

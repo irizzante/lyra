@@ -5,9 +5,7 @@ from __future__ import annotations
 import json
 from unittest.mock import MagicMock, patch
 
-import pytest
 
-from lyra.extract.heuristic import ExtractedEntity
 from lyra.extract.llm import _parse_response, _resolve_model, extract_with_llm
 
 
@@ -188,7 +186,7 @@ def test_extraction_config_to_dict_includes_set_fields() -> None:
 
 def test_config_round_trips_extraction_section() -> None:
     from lyra.config import Config, ExtractionConfig
-    import tempfile, yaml
+    import tempfile
     from pathlib import Path
 
     with tempfile.TemporaryDirectory() as td:

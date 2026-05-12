@@ -7,7 +7,7 @@ from pathlib import Path
 import pytest
 
 from lyra.ids import new_ulid
-from lyra.lint import lint_vault, LintReport
+from lyra.lint import lint_vault
 from lyra import markdown as md
 from lyra.vault import ensure_layout
 

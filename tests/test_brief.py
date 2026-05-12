@@ -4,9 +4,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
-import pytest
 
-from lyra.brief import generate_brief, DEFAULT_TOKEN_BUDGET
+from lyra.brief import generate_brief
 from lyra import markdown as md
 
 

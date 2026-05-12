@@ -4,11 +4,11 @@ from __future__ import annotations
 
 import subprocess
 from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 import pytest
 
-from lyra.index.qmd_index import QmdIndexConfig, search, _parse_hits, COLLECTION_NAME
+from lyra.index.qmd_index import QmdIndexConfig, search, COLLECTION_NAME
 from lyra.query import hybrid_query, _run_qmd_search, _parse_qmd_output
 
 

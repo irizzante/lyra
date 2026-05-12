@@ -9,7 +9,6 @@ import pytest
 from lyra import markdown as md
 from lyra.compile_pipeline import (
     _auto_supersede_pass,
-    _build_page_index,
     _recency,
     _authority,
     _inbound_supports,

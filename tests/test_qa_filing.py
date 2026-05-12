@@ -37,7 +37,7 @@ def test_file_answer_creates_qa_file(vault: Path) -> None:
 def test_file_answer_qa_path_has_ulid_prefix(vault: Path) -> None:
     result = file_answer("What is BM25?", vault, use_vector=False)
     stem = result.qa_path.stem
-    ulid_part = stem.split("-")[0]
+    assert is_ulid(stem.split("-")[0])
     assert is_ulid(result.qa_id)
 
 

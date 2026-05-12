@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import sqlite3
 from pathlib import Path
 
 import pytest
@@ -304,12 +303,11 @@ def test_traverse_excludes_contradicts_by_default(tmp_path):
 def test_traverse_excludes_superseded_by_by_default(tmp_path):
     conn = open_db(_in_memory_cfg(tmp_path))
     _seed_graph(conn)
-    # B→superseded_by→A: traversing from B should NOT reach A via that edge
-    result = dict(traverse(conn, ["B"], max_hops=1))
+    # B→superseded_by→A: traversing from B should NOT reach A via that edge.
     # A is reachable via the reverse of B←supports←A (undirected), so
     # check the exclusion only for the superseded_by direction:
-    # edge (B, superseded_by, A) — traversal should not follow it outbound
-    # We verify by starting from D, which only has a contradicts edge to E
+    # edge (B, superseded_by, A) — traversal should not follow it outbound.
+    # We verify by starting from D, which only has a contradicts edge to E.
     result_d = dict(traverse(conn, ["D"], max_hops=1))
     assert "E" not in result_d
     conn.close()

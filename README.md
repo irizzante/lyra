@@ -47,6 +47,17 @@ Lyra takes the opposite stance:
 
 ## Installation
 
+### Prerequisite — `qmd` CLI (hybrid search backend)
+
+Lyra's hybrid index delegates BM25/FTS5 + vector search to
+[**qmd**](https://github.com/tobi/qmd), a small Node-based CLI. Install it once
+globally:
+
+```bash
+npm install -g @tobilu/qmd
+qmd --version    # should print 2.1.0 or later
+```
+
 ### From source (recommended for v0.1.0)
 
 ```bash

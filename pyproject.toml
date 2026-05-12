@@ -24,9 +24,10 @@ dependencies = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/irizzante/lyra-memory"
-"Bug Tracker" = "https://github.com/irizzante/lyra-memory/issues"
-Changelog = "https://github.com/irizzante/lyra-memory/blob/main/CHANGELOG.md"
+Homepage = "https://github.com/irizzante/lyra"
+Repository = "https://github.com/irizzante/lyra"
+"Bug Tracker" = "https://github.com/irizzante/lyra/issues"
+Changelog = "https://github.com/irizzante/lyra/blob/main/CHANGELOG.md"
 
 [project.optional-dependencies]
 dev = [

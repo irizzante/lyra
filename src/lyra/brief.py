@@ -50,6 +50,7 @@ def generate_brief(
     _add(_recent_activity_section(vault_path, n=recent_activity_lines))
     _add(_recent_sessions_section(vault_path, n=recent_sessions))
     _add(_top_pages_section(vault_path, n=top_pages))
+    _add(_raw_pending_section(vault_path))
     _add(_usage_hint())
 
     return _SEP.join(sections)
@@ -175,6 +176,42 @@ def _top_pages_section(vault_path: Path, n: int) -> str:
         tail_cap=_TAIL_ITEM_CAP,
     )
     return "## Knowledge base (top pages)\n\n" + "\n".join(lines)
+
+
+def _raw_pending_section(vault_path: Path) -> str:
+    """Return a one-line notice when raw pages have not yet been promoted to wiki/."""
+    raw_dir = vault_path / "raw"
+    if not raw_dir.exists():
+        return ""
+
+    raw_ids: set[str] = set()
+    for path in raw_dir.glob("*.md"):
+        try:
+            doc = md.read(path)
+            raw_id = doc.frontmatter.get("raw_id")
+            if raw_id:
+                raw_ids.add(str(raw_id))
+        except Exception:  # noqa: BLE001
+            continue
+
+    if not raw_ids:
+        return ""
+
+    promoted: set[str] = set()
+    wiki_root = vault_path / "wiki"
+    if wiki_root.exists():
+        for path in wiki_root.rglob("*.md"):
+            try:
+                doc = md.read(path)
+                for src in doc.frontmatter.get("sources") or []:
+                    promoted.add(str(src))
+            except Exception:  # noqa: BLE001
+                continue
+
+    pending = len(raw_ids - promoted)
+    if pending == 0:
+        return ""
+    return f"📋 {pending} raw pages pending promotion"
 
 
 def _usage_hint() -> str:

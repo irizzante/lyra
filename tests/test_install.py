@@ -84,7 +84,8 @@ def test_install_both_skill_and_hook(claude_dir: Path) -> None:
 
     assert (claude_dir / "skills" / "lyra" / "SKILL.md").exists()
     assert (claude_dir / "hooks" / "lyra" / "session-start.mjs").exists()
-    assert len(report.copied) == 2
+    assert (claude_dir / "hooks" / "lyra" / "session-end.mjs").exists()
+    assert len(report.copied) == 3
 
 
 def test_install_invalid_scope_raises() -> None:

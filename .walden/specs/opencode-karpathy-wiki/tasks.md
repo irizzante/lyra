@@ -287,16 +287,16 @@ Goal: extract entities (people, projects, libraries, concepts, files, decisions)
     - Verification:
       - command: ["uv", "run", "pytest", "-q", "tests/test_lint_contradictions.py"]
 
-- [⏳] 30. M3.10 — SessionEnd hook + brief extension for raw-pending visibility
-  - [⏳] 30.1 Implement `hooks/claude-code/session-end.mjs` running `lyra compile` (LiteLLM if configured, else heuristic); extend `lyra brief` to include `📋 N raw pages pending promotion` line when `count(raw/*.md not yet promoted) > 0` (cheap directory scan, no hash); update `lyra install --hook` to install both SessionStart and SessionEnd
+- [✅] 30. M3.10 — SessionEnd hook + brief extension for raw-pending visibility
+  - [✅] 30.1 Implement `hooks/claude-code/session-end.mjs` running `lyra compile` (LiteLLM if configured, else heuristic); extend `lyra brief` to include `📋 N raw pages pending promotion` line when `count(raw/*.md not yet promoted) > 0` (cheap directory scan, no hash); update `lyra install --hook` to install both SessionStart and SessionEnd
     - Requirements: `R3.AC1`–`R3.AC4`, `R4.AC1`–`R4.AC8`, `R8.AC1`–`R8.AC4`
     - Design: `Components > OpenCode Hook Adapter`, ADR-5
     - Verification:
       - command: ["node", "--check", "hooks/claude-code/session-end.mjs"]
       - command: ["uv", "run", "pytest", "-q", "tests/test_brief_pending_count.py"]
 
-- [⏳] 31. M3.11 — Skill update: in-session entity extraction workflow
-  - [⏳] 31.1 Add "Raw promotion workflow" section to `skills/lyra/SKILL.md`: when brief shows raw pending OR after `lyra ingest` succeeds OR on user request, agent reads each raw page, extracts entities (people/projects/libraries/concepts/files/decisions) using the documented prompt template, calls `lyra compile --raw-id <id> --entities '<json>'` per page; document entity JSON schema in skill body
+- [✅] 31. M3.11 — Skill update: in-session entity extraction workflow
+  - [✅] 31.1 Add "Raw promotion workflow" section to `skills/lyra/SKILL.md`: when brief shows raw pending OR after `lyra ingest` succeeds OR on user request, agent reads each raw page, extracts entities (people/projects/libraries/concepts/files/decisions) using the documented prompt template, calls `lyra compile --raw-id <id> --entities '<json>'` per page; document entity JSON schema in skill body
     - Requirements: `R12.AC1`–`R12.AC4`, `R14.AC2`
     - Design: `Components > Lyra Skill`, ADR-3, ADR-9
     - Verification:

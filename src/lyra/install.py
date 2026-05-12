@@ -22,6 +22,7 @@ from importlib import resources
 from pathlib import Path
 
 HOOK_ENTRY_SENTINEL = "lyra/session-start.mjs"
+HOOK_END_ENTRY_SENTINEL = "lyra/session-end.mjs"
 
 
 class InstallReport:
@@ -69,9 +70,13 @@ def install(
         hook_dest = target / "hooks" / "lyra" / "session-start.mjs"
         _copy_template(tmpl, "session-start.mjs", hook_dest, report)
 
+        hook_end_dest = target / "hooks" / "lyra" / "session-end.mjs"
+        _copy_template(tmpl, "session-end.mjs", hook_end_dest, report)
+
         if not no_inject:
             settings_path = target / "settings.json"
             _patch_settings(settings_path, hook_dest, report)
+            _patch_settings_session_end(settings_path, hook_end_dest, report)
 
     return report
 
@@ -111,5 +116,37 @@ def _hook_entry_present(session_start: list) -> bool:
             continue
         for h in group.get("hooks", []):
             if isinstance(h, dict) and HOOK_ENTRY_SENTINEL in h.get("command", ""):
+                return True
+    return False
+
+
+def _patch_settings_session_end(settings_path: Path, hook_path: Path, report: InstallReport) -> None:
+    """Add the SessionEnd hook entry to settings.json if not already present."""
+    data: dict = {}
+    if settings_path.exists():
+        try:
+            data = json.loads(settings_path.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError):
+            data = {}
+
+    hooks = data.setdefault("hooks", {})
+    session_end = hooks.setdefault("SessionEnd", [])
+
+    command = f"node {hook_path}"
+    if _hook_end_entry_present(session_end):
+        report.skipped.append(settings_path)
+        return
+
+    session_end.append({"hooks": [{"type": "command", "command": command}]})
+    settings_path.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
+    report.patched.append(settings_path)
+
+
+def _hook_end_entry_present(session_end: list) -> bool:
+    for group in session_end:
+        if not isinstance(group, dict):
+            continue
+        for h in group.get("hooks", []):
+            if isinstance(h, dict) and HOOK_END_ENTRY_SENTINEL in h.get("command", ""):
                 return True
     return False
